@@ -1,0 +1,22 @@
+{
+  "placeholderImages": [
+    {
+      "id": "auth-background",
+      "description": "Authentication background image",
+      "imageUrl": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=1200&h=800&fit=crop",
+      "imageHint": "Modern ecommerce warehouse with automated storage systems"
+    },
+    {
+      "id": "dashboard-background",
+      "description": "Dashboard background image",
+      "imageUrl": "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=1200&h=800&fit=crop",
+      "imageHint": "Business analytics and data visualization"
+    },
+    {
+      "id": "inventory-background",
+      "description": "Inventory management background",
+      "imageUrl": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=1200&h=800&fit=crop",
+      "imageHint": "Warehouse and inventory storage"
+    }
+  ]
+}

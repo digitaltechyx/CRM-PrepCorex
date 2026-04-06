@@ -30,7 +30,7 @@ export function CrmSidebar() {
   const { signOut } = useAuth();
 
   return (
-    <aside className="flex h-screen w-64 flex-col border-r border-border bg-card">
+    <aside className="flex h-full min-h-0 w-64 shrink-0 flex-col border-r border-border bg-card">
       <div className="border-b p-4">
         <Link href="/dashboard" className="block">
           <img
@@ -44,7 +44,7 @@ export function CrmSidebar() {
         </Link>
         <p className="mt-2 text-xs text-muted-foreground">Sales & billing</p>
       </div>
-      <nav className="flex flex-1 flex-col gap-1 p-3">
+      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
         {nav.map((item) => {
           const Icon = item.icon;
           const active =

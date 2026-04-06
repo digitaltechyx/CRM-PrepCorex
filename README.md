@@ -1,6 +1,10 @@
 # PSF CRM
 
-Standalone **PrepCorex CRM** app: leads, address book (scaffolds), quote management, and invoice management. Uses the **same Firebase project** as PSF StockFlow so quotes and invoices read/write the same Firestore data.
+Standalone **PrepCorex CRM** app: **lead management** (pipeline Kanban, list, follow-ups due today, timeline, CSV import), address book (scaffold), quote management, and invoice management. Uses the **same Firebase project** as PSF StockFlow.
+
+### Lead data (`crmLeads`)
+
+Leads are stored in Firestore at `crmLeads/{leadId}` with a `timeline` subcollection for notes and status changes. Deploy **Firestore rules** and **indexes** from the main StockFlow repo (`firestore.rules`, `firestore.indexes.json`) so admins/sub-admins can read/write `crmLeads`. After deploying rules, run `firebase deploy --only firestore:indexes` if the console asks for a composite index on `updatedAt`.
 
 ## Run locally
 

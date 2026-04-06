@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { CrmDashboardLeadWidgets } from "@/components/crm/leads/crm-dashboard-lead-widgets";
 import { Users, BookUser, Briefcase, FileText, Receipt } from "lucide-react";
 
 const modules = [
   {
     title: "Leads",
-    description: "Pipeline and opportunities (coming soon).",
+    description: "Pipeline, follow-ups, CSV import, and timeline.",
     href: "/dashboard/leads",
     icon: Users,
   },
@@ -44,6 +45,8 @@ export default function CrmDashboardHomePage() {
           Same Firebase project as StockFlow — quotes and invoices use your existing data.
         </p>
       </div>
+      <CrmDashboardLeadWidgets />
+
       <div className="grid gap-4 sm:grid-cols-2">
         {modules.map((m) => {
           const Icon = m.icon;

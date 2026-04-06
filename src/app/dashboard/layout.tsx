@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { canAccessCrm } from "@/lib/crm-access";
 import { CrmSidebar } from "@/components/crm/crm-sidebar";
+import { CrmLeadsProvider } from "@/contexts/crm-leads-context";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user, userProfile, loading, signOut } = useAuth();
@@ -31,9 +32,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-screen w-full">
-      <CrmSidebar />
-      <main className="min-h-screen flex-1 overflow-auto bg-background p-4 sm:p-6">{children}</main>
-    </div>
+    <CrmLeadsProvider>
+      {/* h-dvh + overflow-hidden: viewport-fixed shell; only <main> scrolls — sidebar stays put */}
+      <div className="flex h-dvh min-h-0 w-full max-w-full overflow-hidden">
+        <CrmSidebar />
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-background p-4 sm:p-6">
+          {children}
+        </main>
+      </div>
+    </CrmLeadsProvider>
   );
 }

@@ -22,6 +22,7 @@ import { useCollection } from "@/hooks/use-collection";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
+import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
 import {
   type CrmAddressContact,
   contactMatchesQuery,
@@ -2851,7 +2852,7 @@ Arshad Iqbal`,
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex justify-center sm:justify-start">
                       <img
-                        src="/quote-logo.png"
+                        src={quotationInvoiceLogoSrc}
                         alt="Prep Services FBA"
                         className="h-20 w-auto object-contain"
                       />

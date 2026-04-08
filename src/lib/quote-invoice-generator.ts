@@ -1,4 +1,5 @@
 import jsPDF from "jspdf";
+import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
 
 interface QuoteInvoiceParty {
   name: string;
@@ -32,6 +33,13 @@ interface QuoteInvoiceData {
   terms?: string;
 }
 
+function logoFormatForPdf(src: string): "PNG" | "JPEG" {
+  const path = decodeURIComponent(src.split("?")[0] || "");
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "JPEG";
+  return "PNG";
+}
+
 const loadLogo = async (src: string): Promise<HTMLImageElement | null> => {
   try {
     const img = new Image();
@@ -61,9 +69,9 @@ export async function generateQuoteInvoicePdfBlob(data: QuoteInvoiceData): Promi
   const contentMaxY = pageHeight - bottomMargin; // keep content above footer area
   let y = margin;
 
-  const logo = await loadLogo("/quote-logo.png");
+  const logo = await loadLogo(quotationInvoiceLogoSrc);
   if (logo) {
-    doc.addImage(logo, "PNG", margin, y, 28, 18);
+    doc.addImage(logo, logoFormatForPdf(quotationInvoiceLogoSrc), margin, y, 28, 18);
   }
 
   doc.setFont("helvetica", "bold");

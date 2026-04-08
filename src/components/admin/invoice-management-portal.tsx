@@ -7,10 +7,12 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
   orderBy,
   query,
   serverTimestamp,
   updateDoc,
+  where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useCollection } from "@/hooks/use-collection";
@@ -18,6 +20,12 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
+import {
+  type CrmAddressContact,
+  contactMatchesQuery,
+  contactSuggestionLabel,
+  getContactMatchKey,
+} from "@/lib/crm-address-book";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -339,6 +347,11 @@ export function InvoiceManagementPortal() {
     []
   );
   const { data: invoices, loading } = useCollection<ExternalInvoice>("external_invoices", invoicesQuery);
+  const contactsQuery = useMemo(
+    () => query(collection(db, "crm_contacts"), orderBy("updatedAt", "desc")),
+    []
+  );
+  const { data: crmContacts } = useCollection<CrmAddressContact>("crm_contacts", contactsQuery);
 
   const deleteLogsQuery = useMemo(
     () => query(collection(db, "external_invoice_delete_logs"), orderBy("deletedAt", "desc")),
@@ -364,6 +377,7 @@ export function InvoiceManagementPortal() {
 
   const [activeTab, setActiveTab] = useState("new");
   const [formData, setFormData] = useState(createEmptyInvoiceForm());
+  const [clientLookup, setClientLookup] = useState("");
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -429,6 +443,24 @@ export function InvoiceManagementPortal() {
   const [testOverdueDialogOpen, setTestOverdueDialogOpen] = useState(false);
   const [testOverdueInvoiceId, setTestOverdueInvoiceId] = useState<string>("");
   const [isTestingOverdue, setIsTestingOverdue] = useState(false);
+
+  const invoiceContactOptions = useMemo(
+    () =>
+      crmContacts
+        .filter((c) => contactMatchesQuery(c, clientLookup))
+        .slice(0, 20)
+        .map((contact) => ({
+          contact,
+          label: contactSuggestionLabel(contact),
+        })),
+    [crmContacts, clientLookup]
+  );
+
+  const invoiceContactByLabel = useMemo(() => {
+    const map = new Map<string, CrmAddressContact>();
+    invoiceContactOptions.forEach((item) => map.set(item.label, item.contact));
+    return map;
+  }, [invoiceContactOptions]);
 
   const recalculateTotals = (
     items: ExternalInvoiceItem[],
@@ -647,7 +679,55 @@ export function InvoiceManagementPortal() {
 
   const resetForm = () => {
     setFormData(createEmptyInvoiceForm());
+    setClientLookup("");
     setEditingInvoiceId(null);
+  };
+
+  const applyContactToInvoiceForm = (contact: CrmAddressContact) => {
+    setFormData((prev) => ({
+      ...prev,
+      clientName: contact.fullName || prev.clientName,
+      clientEmail: contact.email || prev.clientEmail,
+      clientPhone: contact.phone || prev.clientPhone,
+      clientAddress: contact.address || prev.clientAddress,
+      clientCity: contact.city || prev.clientCity,
+      clientState: contact.state || prev.clientState,
+      clientZip: contact.zip || prev.clientZip,
+      clientCountry: contact.country || prev.clientCountry,
+    }));
+  };
+
+  const upsertAddressBookFromInvoiceForm = async () => {
+    const seed = {
+      fullName: formData.clientName?.trim() || "",
+      email: formData.clientEmail?.trim() || "",
+      phone: formData.clientPhone?.trim() || "",
+      address: formData.clientAddress?.trim() || "",
+      city: formData.clientCity?.trim() || "",
+      state: formData.clientState?.trim() || "",
+      zip: formData.clientZip?.trim() || "",
+      country: formData.clientCountry?.trim() || "",
+      source: "invoice" as const,
+    };
+    if (!seed.fullName && !seed.email && !seed.phone) return;
+    const matchKey = getContactMatchKey(seed);
+    const existing = await getDocs(
+      query(collection(db, "crm_contacts"), where("matchKey", "==", matchKey))
+    );
+    const payload = {
+      ...seed,
+      matchKey,
+      updatedAt: serverTimestamp(),
+    };
+    if (existing.empty) {
+      await addDoc(collection(db, "crm_contacts"), {
+        ...payload,
+        createdAt: serverTimestamp(),
+        createdBy: userProfile?.uid || "",
+      });
+    } else {
+      await updateDoc(doc(db, "crm_contacts", existing.docs[0].id), payload);
+    }
   };
 
   const updateItem = (id: string, field: keyof ExternalInvoiceItem, value: string) => {
@@ -1471,6 +1551,7 @@ Prep Services FBA Team`;
 
     if (editingInvoiceId) {
       await updateDoc(doc(db, "external_invoices", editingInvoiceId), payload as any);
+      await upsertAddressBookFromInvoiceForm();
       return { ...payload, id: editingInvoiceId } as ExternalInvoice;
     }
 
@@ -1478,6 +1559,7 @@ Prep Services FBA Team`;
       ...payload,
       createdAt: serverTimestamp(),
     });
+    await upsertAddressBookFromInvoiceForm();
     return { ...payload, id: docRef.id } as ExternalInvoice;
   };
 
@@ -2820,6 +2902,28 @@ Prep Services FBA Team`;
                     ) : (
                       <div className="grid gap-2">
                         <div>
+                          <Label className="text-xs text-muted-foreground">Find in Address Book</Label>
+                          <Input
+                            value={clientLookup}
+                            list="invoice-contact-suggestions"
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setClientLookup(value);
+                              const matched = invoiceContactByLabel.get(value);
+                              if (matched) {
+                                applyContactToInvoiceForm(matched);
+                              }
+                            }}
+                            placeholder="Type name, email, phone..."
+                            className="h-9"
+                          />
+                          <datalist id="invoice-contact-suggestions">
+                            {invoiceContactOptions.map((option) => (
+                              <option key={option.contact.id} value={option.label} />
+                            ))}
+                          </datalist>
+                        </div>
+                        <div>
                           <Label className="text-xs text-muted-foreground">Client Name</Label>
                           <Input
                             value={formData.clientName}
@@ -3760,7 +3864,7 @@ Prep Services FBA Team`;
                 Email Log
               </CardTitle>
               <CardDescription>
-                All emails sent from the invoice portal — by recipient and date.
+                All emails sent from invoice management — by recipient and date.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

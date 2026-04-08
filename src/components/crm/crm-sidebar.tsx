@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  FileText,
   Receipt,
   Briefcase,
   Users,
@@ -21,8 +20,7 @@ const nav = [
   { title: "Leads", href: "/dashboard/leads", icon: Users },
   { title: "Address book", href: "/dashboard/contacts", icon: BookUser },
   { title: "Quote management", href: "/dashboard/quotes", icon: Briefcase },
-  { title: "Invoices (list)", href: "/dashboard/invoices", icon: FileText },
-  { title: "Invoice portal", href: "/dashboard/invoice-portal", icon: Receipt },
+  { title: "Invoice management", href: "/dashboard/invoice-portal", icon: Receipt },
 ];
 
 export function CrmSidebar() {

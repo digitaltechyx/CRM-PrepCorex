@@ -23,6 +23,12 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
 import {
+  type CrmAddressContact,
+  contactMatchesQuery,
+  contactSuggestionLabel,
+  getContactMatchKey,
+} from "@/lib/crm-address-book";
+import {
   Badge,
 } from "@/components/ui/badge";
 import {
@@ -368,6 +374,11 @@ export function QuoteManagement() {
     []
   );
   const { data: quotes, loading } = useCollection<Quote>("quotes", quotesQuery);
+  const contactsQuery = useMemo(
+    () => query(collection(db, "crm_contacts"), orderBy("updatedAt", "desc")),
+    []
+  );
+  const { data: crmContacts } = useCollection<CrmAddressContact>("crm_contacts", contactsQuery);
   
   const deleteLogsQuery = useMemo(
     () => query(collection(db, "quote_delete_logs"), orderBy("deletedAt", "desc")),
@@ -377,6 +388,7 @@ export function QuoteManagement() {
 
   const [activeTab, setActiveTab] = useState("new");
   const [formData, setFormData] = useState(createEmptyQuoteForm());
+  const [clientLookup, setClientLookup] = useState("");
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
@@ -414,6 +426,24 @@ export function QuoteManagement() {
   const [acceptedStatusFilter, setAcceptedStatusFilter] = useState<"all" | "active" | "expired">("all");
   const [rejectedStatusFilter, setRejectedStatusFilter] = useState<"all" | "active" | "expired">("all");
   const [convertStatusFilter, setConvertStatusFilter] = useState<"all" | "active" | "expired">("all");
+
+  const quoteContactOptions = useMemo(
+    () =>
+      crmContacts
+        .filter((c) => contactMatchesQuery(c, clientLookup))
+        .slice(0, 20)
+        .map((contact) => ({
+          contact,
+          label: contactSuggestionLabel(contact),
+        })),
+    [crmContacts, clientLookup]
+  );
+
+  const quoteContactByLabel = useMemo(() => {
+    const map = new Map<string, CrmAddressContact>();
+    quoteContactOptions.forEach((item) => map.set(item.label, item.contact));
+    return map;
+  }, [quoteContactOptions]);
 
   const statusCounts = useMemo(() => {
     const counts = { draft: 0, sent: 0, accepted: 0, lost: 0 };
@@ -727,7 +757,56 @@ export function QuoteManagement() {
 
   const resetForm = () => {
     setFormData(createEmptyQuoteForm());
+    setClientLookup("");
     setEditingQuoteId(null);
+  };
+
+  const applyContactToQuoteForm = (contact: CrmAddressContact) => {
+    setFormData((prev) => ({
+      ...prev,
+      recipientName: contact.fullName || prev.recipientName,
+      recipientEmail: contact.email || prev.recipientEmail,
+      recipientPhone: contact.phone || prev.recipientPhone,
+      recipientAddress: contact.address || prev.recipientAddress,
+      recipientCity: contact.city || prev.recipientCity,
+      recipientState: contact.state || prev.recipientState,
+      recipientZip: contact.zip || prev.recipientZip,
+      recipientCountry: contact.country || prev.recipientCountry,
+    }));
+  };
+
+  const upsertAddressBookFromQuoteForm = async () => {
+    const seed = {
+      fullName: formData.recipientName?.trim() || "",
+      email: formData.recipientEmail?.trim() || "",
+      phone: formData.recipientPhone?.trim() || "",
+      address: formData.recipientAddress?.trim() || "",
+      city: formData.recipientCity?.trim() || "",
+      state: formData.recipientState?.trim() || "",
+      zip: formData.recipientZip?.trim() || "",
+      country: formData.recipientCountry?.trim() || "",
+      source: "quote" as const,
+    };
+
+    if (!seed.fullName && !seed.email && !seed.phone) return;
+    const matchKey = getContactMatchKey(seed);
+    const existing = await getDocs(
+      query(collection(db, "crm_contacts"), where("matchKey", "==", matchKey))
+    );
+    const payload = {
+      ...seed,
+      matchKey,
+      updatedAt: serverTimestamp(),
+    };
+    if (existing.empty) {
+      await addDoc(collection(db, "crm_contacts"), {
+        ...payload,
+        createdAt: serverTimestamp(),
+        createdBy: userProfile?.uid || "",
+      });
+    } else {
+      await updateDoc(doc(db, "crm_contacts", existing.docs[0].id), payload);
+    }
   };
 
   const mapQuoteToFormData = (quote: Quote) => ({
@@ -815,6 +894,7 @@ export function QuoteManagement() {
           status: "draft",
           updatedAt: serverTimestamp(),
         });
+        await upsertAddressBookFromQuoteForm();
         toast({ title: "Draft updated." });
       } else {
         await addDoc(collection(db, "quotes"), {
@@ -828,6 +908,7 @@ export function QuoteManagement() {
           updatedAt: serverTimestamp(),
           createdBy: userProfile?.uid || "",
         });
+        await upsertAddressBookFromQuoteForm();
         toast({ title: "Draft saved." });
       }
       resetForm();
@@ -905,6 +986,7 @@ export function QuoteManagement() {
           total,
           updatedAt: serverTimestamp(),
         });
+        await upsertAddressBookFromQuoteForm();
         const quote = quotes.find((q) => q.id === editingQuoteId);
         if (quote) {
           const preparedQuote = {
@@ -929,6 +1011,7 @@ export function QuoteManagement() {
           updatedAt: serverTimestamp(),
           createdBy: userProfile?.uid || "",
         });
+        await upsertAddressBookFromQuoteForm();
         const preparedQuote = {
           id: docRef.id,
           status: "draft",
@@ -2852,6 +2935,28 @@ Arshad Iqbal`,
                       </div>
                     ) : (
                       <div className="grid gap-2">
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Find in Address Book</Label>
+                          <Input
+                            value={clientLookup}
+                            list="quote-contact-suggestions"
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setClientLookup(value);
+                              const matched = quoteContactByLabel.get(value);
+                              if (matched) {
+                                applyContactToQuoteForm(matched);
+                              }
+                            }}
+                            placeholder="Type name, email, phone..."
+                            className="h-9"
+                          />
+                          <datalist id="quote-contact-suggestions">
+                            {quoteContactOptions.map((option) => (
+                              <option key={option.contact.id} value={option.label} />
+                            ))}
+                          </datalist>
+                        </div>
                         <div>
                           <Label className="text-xs text-muted-foreground">Client Name</Label>
                           <Input

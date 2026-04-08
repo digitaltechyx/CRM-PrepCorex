@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CrmDashboardLeadWidgets } from "@/components/crm/leads/crm-dashboard-lead-widgets";
-import { Users, BookUser, Briefcase, FileText, Receipt } from "lucide-react";
+import { Users, BookUser, Briefcase, Receipt } from "lucide-react";
 
 const modules = [
   {
@@ -23,13 +23,7 @@ const modules = [
     icon: Briefcase,
   },
   {
-    title: "Invoices (list)",
-    description: "Per-user invoice summaries and commissions.",
-    href: "/dashboard/invoices",
-    icon: FileText,
-  },
-  {
-    title: "Invoice portal",
+    title: "Invoice management",
     description: "External invoices, payments, and email.",
     href: "/dashboard/invoice-portal",
     icon: Receipt,

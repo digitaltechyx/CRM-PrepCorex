@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useCrmLeads } from "@/contexts/crm-leads-context";
 import { useToast } from "@/hooks/use-toast";
+import { getContactMatchKey } from "@/lib/crm-address-book";
 import type { PlatformSource } from "@/lib/crm-lead-schema";
 import { Upload, Loader2 } from "lucide-react";
 
@@ -25,7 +26,7 @@ function mapSource(raw: string): PlatformSource {
 /** Export a sheet as CSV from Google Sheets, then upload here. Expected columns: name, email, phone, source, notes (header row). */
 export function LeadsCsvImportButton() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const { createLead } = useCrmLeads();
+  const { createLead, leads, loading: leadsLoading } = useCrmLeads();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
 
@@ -33,9 +34,24 @@ export function LeadsCsvImportButton() {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    if (leadsLoading) {
+      toast({
+        variant: "destructive",
+        title: "Leads are still loading",
+        description: "Wait a moment, then try the import again.",
+      });
+      return;
+    }
     setBusy(true);
     let ok = 0;
     let fail = 0;
+    let skipped = 0;
+    const existingKeys = new Set(
+      leads.map((l) =>
+        getContactMatchKey({ fullName: l.leadName, email: l.email, phone: l.phone })
+      )
+    );
+    const seenInFile = new Set<string>();
     try {
       const text = await file.text();
       const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -62,6 +78,16 @@ export function LeadsCsvImportButton() {
         const phone = iPhone >= 0 ? cells[iPhone] : "";
         const sourceRaw = iSource >= 0 ? cells[iSource] : "";
         const notes = iNotes >= 0 ? cells[iNotes] : "";
+        const dedupeKey = getContactMatchKey({
+          fullName: name,
+          email: email || undefined,
+          phone: phone || undefined,
+        });
+        if (existingKeys.has(dedupeKey) || seenInFile.has(dedupeKey)) {
+          skipped++;
+          continue;
+        }
+        seenInFile.add(dedupeKey);
         try {
           await createLead({
             leadName: name,
@@ -70,14 +96,18 @@ export function LeadsCsvImportButton() {
             platformSource: mapSource(sourceRaw),
             notes: notes || undefined,
           });
+          existingKeys.add(dedupeKey);
           ok++;
         } catch {
           fail++;
         }
       }
+      const parts = [`${ok} added`];
+      if (skipped) parts.push(`${skipped} skipped (already in CRM or duplicate row)`);
+      if (fail) parts.push(`${fail} failed`);
       toast({
         title: "Import finished",
-        description: `${ok} added${fail ? `, ${fail} failed` : ""}`,
+        description: parts.join(" · "),
       });
     } catch (err) {
       toast({
@@ -98,7 +128,7 @@ export function LeadsCsvImportButton() {
         variant="outline"
         size="sm"
         className="gap-1.5 rounded-xl border-border/80 bg-background/80 shadow-sm transition hover:border-primary/30 hover:bg-primary/5 hover:shadow"
-        disabled={busy}
+        disabled={busy || leadsLoading}
         onClick={() => inputRef.current?.click()}
       >
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}

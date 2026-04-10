@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -18,9 +18,10 @@ import { useCrmLeads } from "@/contexts/crm-leads-context";
 import { useAuth } from "@/hooks/use-auth";
 import { PIPELINE_STATUSES, STATUS_LABELS, type LeadStatus } from "@/lib/crm-lead-schema";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { KANBAN_COLUMN_ACCENTS } from "@/lib/crm-kanban-accents";
-import { ChevronRight, LayoutGrid, Rows3 } from "lucide-react";
+import { ChevronLeft, ChevronRight, LayoutGrid, Rows3 } from "lucide-react";
 
 function KanbanColumn({
   status,
@@ -98,10 +99,47 @@ type Props = {
   onOpenLead: (l: CrmLead) => void;
 };
 
+const SCROLL_EDGE_EPS = 6;
+
 export function LeadKanban({ leads, onOpenLead }: Props) {
   const { user } = useAuth();
   const { updateLeadStatus } = useCrmLeads();
   const [active, setActive] = useState<CrmLead | null>(null);
+  const boardScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollX, setCanScrollX] = useState(false);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const syncScrollState = useCallback(() => {
+    const el = boardScrollRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    const overflow = scrollWidth > clientWidth + SCROLL_EDGE_EPS;
+    setCanScrollX(overflow);
+    setCanScrollLeft(overflow && scrollLeft > SCROLL_EDGE_EPS);
+    setCanScrollRight(overflow && scrollLeft + clientWidth < scrollWidth - SCROLL_EDGE_EPS);
+  }, []);
+
+  useLayoutEffect(() => {
+    syncScrollState();
+    const el = boardScrollRef.current;
+    if (!el) return;
+    const onScroll = () => syncScrollState();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => syncScrollState());
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, [syncScrollState, leads.length]);
+
+  const scrollBoard = useCallback((dir: -1 | 1) => {
+    const el = boardScrollRef.current;
+    if (!el) return;
+    const step = Math.max(260, Math.round(el.clientWidth * 0.72));
+    el.scrollBy({ left: dir * step, behavior: "smooth" });
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -160,24 +198,64 @@ export function LeadKanban({ leads, onOpenLead }: Props) {
           </div>
         </div>
         <p className="flex items-center gap-1 text-xs font-medium text-muted-foreground sm:justify-end">
-          <span className="hidden sm:inline">Scroll for more stages</span>
-          <span className="sm:hidden">Swipe horizontally</span>
+          <span className="hidden sm:inline">Side arrows or trackpad to move across stages</span>
+          <span className="sm:hidden">Swipe or tap the side arrows</span>
           <ChevronRight className="h-3.5 w-3.5 opacity-60" aria-hidden />
           <ChevronRight className="-ml-2 h-3.5 w-3.5 opacity-40" aria-hidden />
         </p>
       </div>
 
       {/* Native horizontal scroll: keeps overflow inside main so the sidebar does not pan with the board */}
-      <div className="w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain pb-2 [-webkit-overflow-scrolling:touch]">
-        <div className="flex w-max gap-4 pb-2 pr-1 pt-0.5">
-          {PIPELINE_STATUSES.map((status) => (
-            <KanbanColumn
-              key={status}
-              status={status}
-              leads={byStatus(status)}
-              onOpenLead={onOpenLead}
-            />
-          ))}
+      <div className="relative min-w-0">
+        {canScrollX ? (
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              disabled={!canScrollLeft}
+              aria-label="Scroll pipeline left"
+              onClick={() => scrollBoard(-1)}
+              className={cn(
+                "absolute left-0 top-1/2 z-20 h-10 w-10 -translate-y-1/2 rounded-full border border-border/80 bg-background/95 shadow-md backdrop-blur-sm",
+                "hover:bg-background disabled:shadow-sm sm:h-11 sm:w-11"
+              )}
+            >
+              <ChevronLeft className="h-5 w-5" aria-hidden />
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              disabled={!canScrollRight}
+              aria-label="Scroll pipeline right"
+              onClick={() => scrollBoard(1)}
+              className={cn(
+                "absolute right-0 top-1/2 z-20 h-10 w-10 -translate-y-1/2 rounded-full border border-border/80 bg-background/95 shadow-md backdrop-blur-sm",
+                "hover:bg-background disabled:shadow-sm sm:h-11 sm:w-11"
+              )}
+            >
+              <ChevronRight className="h-5 w-5" aria-hidden />
+            </Button>
+          </>
+        ) : null}
+        <div
+          ref={boardScrollRef}
+          className={cn(
+            "w-full min-w-0 max-w-full overflow-x-auto overscroll-x-contain pb-2 [-webkit-overflow-scrolling:touch] [scrollbar-gutter:stable]",
+            canScrollX && "px-10 sm:px-12"
+          )}
+        >
+          <div className="flex w-max gap-4 pb-2 pr-1 pt-0.5">
+            {PIPELINE_STATUSES.map((status) => (
+              <KanbanColumn
+                key={status}
+                status={status}
+                leads={byStatus(status)}
+                onOpenLead={onOpenLead}
+              />
+            ))}
+          </div>
         </div>
       </div>
       <DragOverlay dropAnimation={null}>

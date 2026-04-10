@@ -32,9 +32,12 @@ export function CrmDashboardLeadWidgets() {
   ];
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-lg">Lead pipeline</CardTitle>
+    <Card className="border-border/80 bg-card/90 shadow-sm backdrop-blur-sm">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+        <div>
+          <CardTitle className="font-headline text-lg">Lead snapshot</CardTitle>
+          <p className="text-sm text-muted-foreground">Key counts at a glance</p>
+        </div>
         <Link href="/dashboard/leads" className="text-sm font-medium text-primary hover:underline">
           Open leads →
         </Link>
@@ -47,14 +50,18 @@ export function CrmDashboardLeadWidgets() {
             {items.map((item) => {
               const Icon = item.icon;
               return (
-                <Link key={item.label} href={item.href} className="block">
-                  <div className="flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40">
-                    <div className="rounded-md bg-primary/10 p-2 text-primary">
+                <Link key={item.label} href={item.href} className="group block">
+                  <div className="relative flex items-center gap-3 overflow-hidden rounded-xl border border-border/60 bg-gradient-to-br from-background to-muted/20 p-3.5 shadow-sm transition-all hover:border-primary/25 hover:shadow-md">
+                    <div
+                      className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent opacity-0 transition-opacity group-hover:opacity-100"
+                      aria-hidden
+                    />
+                    <div className="rounded-lg bg-primary/10 p-2.5 text-primary ring-1 ring-primary/10 transition-transform group-hover:scale-105">
                       <Icon className="h-4 w-4" />
                     </div>
-                    <div>
-                      <p className="text-xs font-medium text-muted-foreground">{item.label}</p>
-                      <p className="text-xl font-bold tabular-nums">{item.value}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-muted-foreground">{item.label}</p>
+                      <p className="text-xl font-bold tabular-nums tracking-tight">{item.value}</p>
                     </div>
                   </div>
                 </Link>

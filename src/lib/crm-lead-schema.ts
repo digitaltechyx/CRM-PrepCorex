@@ -117,6 +117,8 @@ export interface CrmLeadInput {
   company?: string;
   email?: string;
   phone?: string;
+  /** Website, store, or social profile URL */
+  websiteUrl?: string;
   platformSource: PlatformSource;
   country?: string;
   businessType?: BusinessType | "";

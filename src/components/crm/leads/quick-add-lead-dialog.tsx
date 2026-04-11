@@ -38,8 +38,10 @@ import { Plus, Loader2 } from "lucide-react";
 
 const schema = z.object({
   leadName: z.string().min(1, "Name is required").max(200),
+  company: z.string().max(200).optional().or(z.literal("")),
   email: z.string().email().optional().or(z.literal("")),
   phone: z.string().max(80).optional().or(z.literal("")),
+  websiteUrl: z.string().max(2000).optional().or(z.literal("")),
   platformSource: z
     .string()
     .refine((v): v is PlatformSource => (PLATFORM_SOURCES as readonly string[]).includes(v), {
@@ -60,8 +62,10 @@ export function QuickAddLeadDialog() {
     resolver: zodResolver(schema),
     defaultValues: {
       leadName: "",
+      company: "",
       email: "",
       phone: "",
+      websiteUrl: "",
       platformSource: "other",
       notes: "",
     },
@@ -72,16 +76,20 @@ export function QuickAddLeadDialog() {
     try {
       await createLead({
         leadName: values.leadName.trim(),
+        company: values.company?.trim() || undefined,
         email: values.email?.trim() || undefined,
         phone: values.phone?.trim() || undefined,
+        websiteUrl: values.websiteUrl?.trim() || undefined,
         platformSource: values.platformSource,
         notes: values.notes?.trim() || undefined,
       });
       toast({ title: "Lead added" });
       form.reset({
         leadName: "",
+        company: "",
         email: "",
         phone: "",
+        websiteUrl: "",
         platformSource: "other",
         notes: "",
       });
@@ -108,7 +116,7 @@ export function QuickAddLeadDialog() {
           Quick add lead
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[min(90vh,760px)] max-w-md overflow-y-auto">
         <DialogHeader>
           <DialogTitle>New lead</DialogTitle>
           <DialogDescription>Add in under a minute. More fields are available in the lead detail panel.</DialogDescription>
@@ -123,6 +131,19 @@ export function QuickAddLeadDialog() {
                   <FormLabel>Name</FormLabel>
                   <FormControl>
                     <Input placeholder="John Smith" autoFocus {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="company"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Company name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="optional" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -149,6 +170,19 @@ export function QuickAddLeadDialog() {
                   <FormLabel>Phone / WhatsApp</FormLabel>
                   <FormControl>
                     <Input placeholder="optional" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="websiteUrl"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Website / URL</FormLabel>
+                  <FormControl>
+                    <Input inputMode="url" autoComplete="url" placeholder="https://… (optional)" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

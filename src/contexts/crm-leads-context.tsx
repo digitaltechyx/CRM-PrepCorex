@@ -11,6 +11,7 @@ import React, {
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   onSnapshot,
   orderBy,
@@ -41,6 +42,7 @@ export interface CrmLead {
   company?: string;
   email?: string;
   phone?: string;
+  websiteUrl?: string;
   platformSource: PlatformSource;
   country?: string;
   businessType?: BusinessType | string;
@@ -79,6 +81,7 @@ function normalizeLead(id: string, data: Record<string, unknown>): CrmLead {
     company: data.company != null ? String(data.company) : undefined,
     email: data.email != null ? String(data.email) : undefined,
     phone: data.phone != null ? String(data.phone) : undefined,
+    websiteUrl: data.websiteUrl != null ? String(data.websiteUrl) : undefined,
     platformSource: (data.platformSource as PlatformSource) || "other",
     country: data.country != null ? String(data.country) : undefined,
     businessType: data.businessType != null ? String(data.businessType) : undefined,
@@ -101,6 +104,7 @@ export type CrmLeadUpdatePatch = Partial<{
   company: string;
   email: string;
   phone: string;
+  websiteUrl: string;
   platformSource: PlatformSource;
   country: string;
   businessType: string;
@@ -123,6 +127,8 @@ type CrmLeadsContextValue = {
   updateLead: (leadId: string, patch: CrmLeadUpdatePatch) => Promise<void>;
   markClient: (leadId: string, monthlyRevenue?: number | null) => Promise<void>;
   addTimelineNote: (leadId: string, text: string, userUid: string) => Promise<void>;
+  updateTimelineNote: (leadId: string, entryId: string, text: string) => Promise<void>;
+  deleteTimelineNote: (leadId: string, entryId: string) => Promise<void>;
   subscribeTimeline: (leadId: string | null, cb: (entries: CrmTimelineEntry[]) => void) => () => void;
 };
 
@@ -201,6 +207,7 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
         company: input.company?.trim() || "",
         email: input.email?.trim() || "",
         phone: input.phone?.trim() || "",
+        websiteUrl: input.websiteUrl?.trim() || "",
         platformSource: input.platformSource,
         country: input.country?.trim() || "",
         businessType: input.businessType || "",
@@ -268,6 +275,7 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
     if (patch.company != null) clean.company = patch.company;
     if (patch.email != null) clean.email = patch.email;
     if (patch.phone != null) clean.phone = patch.phone;
+    if (patch.websiteUrl !== undefined) clean.websiteUrl = patch.websiteUrl.trim();
     if (patch.platformSource != null) clean.platformSource = patch.platformSource;
     if (patch.country != null) clean.country = patch.country;
     if (patch.businessType != null) clean.businessType = patch.businessType;
@@ -301,6 +309,26 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
     },
     [appendTimeline]
   );
+
+  const updateTimelineNote = useCallback(async (leadId: string, entryId: string, text: string) => {
+    const t = text.trim();
+    if (!t) return;
+    await updateDoc(doc(db, COLLECTION, leadId, "timeline", entryId), {
+      text: t,
+      editedAt: serverTimestamp(),
+    });
+    await updateDoc(doc(db, COLLECTION, leadId), {
+      lastContactAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }, []);
+
+  const deleteTimelineNote = useCallback(async (leadId: string, entryId: string) => {
+    await deleteDoc(doc(db, COLLECTION, leadId, "timeline", entryId));
+    await updateDoc(doc(db, COLLECTION, leadId), {
+      updatedAt: serverTimestamp(),
+    });
+  }, []);
 
   const subscribeTimeline = useCallback((leadId: string | null, cb: (entries: CrmTimelineEntry[]) => void) => {
     if (!leadId) {
@@ -336,6 +364,8 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
       updateLead,
       markClient,
       addTimelineNote,
+      updateTimelineNote,
+      deleteTimelineNote,
       subscribeTimeline,
     }),
     [
@@ -347,6 +377,8 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
       updateLead,
       markClient,
       addTimelineNote,
+      updateTimelineNote,
+      deleteTimelineNote,
       subscribeTimeline,
     ]
   );

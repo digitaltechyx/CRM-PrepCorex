@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import nodemailer from "nodemailer";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { readSmtpConfigFromEnv, sendSmtpMail } from "@/lib/smtp-transport";
 
 export const dynamic = "force-dynamic";
 
@@ -100,15 +100,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing required fields." }, { status: 400 });
     }
 
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = Number(process.env.SMTP_PORT || 587);
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPassword = process.env.SMTP_PASSWORD;
-    const smtpSecure = process.env.SMTP_SECURE === "true";
-    const smtpFrom = process.env.SMTP_FROM || smtpUser;
-    const smtpFromName = process.env.SMTP_FROM_NAME || "Prep Services FBA";
-
-    if (!smtpHost || !smtpUser || !smtpPassword) {
+    const smtpConfig = readSmtpConfigFromEnv();
+    if (!smtpConfig) {
       return NextResponse.json({ error: "SMTP credentials are not configured." }, { status: 500 });
     }
 
@@ -120,29 +113,11 @@ export async function POST(request: NextRequest) {
       }))
     );
 
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpSecure, // true for 465, false for other ports
-      requireTLS: !smtpSecure, // require TLS for non-SSL ports
-      auth: {
-        user: smtpUser,
-        pass: smtpPassword,
-      },
-      tls: {
-        // Do not fail on invalid certs
-        rejectUnauthorized: false,
-      },
-    });
-
-    // Verify connection configuration
-    await transporter.verify();
-
-    await transporter.sendMail({
-      from: smtpFromName ? `${smtpFromName} <${smtpFrom}>` : smtpFrom,
+    await sendSmtpMail({
+      config: smtpConfig,
       to,
       subject,
-      text: message,
+      message,
       attachments,
     });
 

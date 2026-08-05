@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
   collection,
@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -25,9 +26,13 @@ import { BookUser, Loader2, Plus, RefreshCcw } from "lucide-react";
 import {
   type AddressBookSeed,
   type CrmAddressContact,
+  type CrmContactSource,
   contactMatchesQuery,
-  getContactMatchKey,
+  contactSourceLabel,
+  findExistingContact,
+  mapPrepCorexUser,
   mergeSeedIntoContact,
+  stripUndefinedFields,
 } from "@/lib/crm-address-book";
 
 type ContactForm = {
@@ -55,6 +60,8 @@ const EMPTY_FORM: ContactForm = {
   country: "",
   notes: "",
 };
+
+type SyncKey = "leads" | "quotes" | "invoices" | "prepcorex" | "email";
 
 function fromLead(data: Record<string, unknown>): AddressBookSeed {
   return {
@@ -103,14 +110,15 @@ export function AddressBookClient() {
   const [search, setSearch] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
-  const [sourceFilter, setSourceFilter] = useState<"all" | "manual" | "lead" | "quote" | "invoice">("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | CrmContactSource>("all");
   const [completenessFilter, setCompletenessFilter] = useState<"all" | "with_email" | "with_phone" | "with_address">("all");
   const [sortBy, setSortBy] = useState<"recent" | "name_asc" | "name_desc" | "company_asc">("recent");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<CrmAddressContact | null>(null);
   const [saving, setSaving] = useState(false);
-  const [syncing, setSyncing] = useState<"" | "leads" | "quotes" | "invoices">("");
+  const [syncing, setSyncing] = useState<"" | SyncKey>("");
   const [form, setForm] = useState<ContactForm>(EMPTY_FORM);
+  const autoEmailSyncStarted = useRef(false);
 
   const contactsQuery = useMemo(
     () => query(collection(db, "crm_contacts"), orderBy("updatedAt", "desc")),
@@ -138,14 +146,6 @@ export function AddressBookClient() {
     return next;
   }, [contacts, search, sourceFilter, countryFilter, companyFilter, completenessFilter, sortBy]);
 
-  const contactByKey = useMemo(() => {
-    const map = new Map<string, CrmAddressContact>();
-    contacts.forEach((c) => {
-      if (c.matchKey) map.set(c.matchKey, c);
-    });
-    return map;
-  }, [contacts]);
-
   function openNew() {
     setEditing(null);
     setForm(EMPTY_FORM);
@@ -169,24 +169,33 @@ export function AddressBookClient() {
     setDialogOpen(true);
   }
 
-  async function upsertSeed(seed: AddressBookSeed): Promise<"created" | "updated" | "skipped"> {
-    if (!seed.fullName && !seed.email && !seed.phone) return "skipped";
-    const key = getContactMatchKey(seed);
-    const existing = contactByKey.get(key) ?? null;
-    const merged = mergeSeedIntoContact(existing, seed);
+  async function upsertSeed(
+    seed: AddressBookSeed,
+    working: CrmAddressContact[]
+  ): Promise<"created" | "updated" | "skipped"> {
+    if (!seed.fullName && !seed.email && !seed.phone && !seed.prepcorexUserId) return "skipped";
+    const existing = findExistingContact(working, seed);
+    const merged = stripUndefinedFields(
+      mergeSeedIntoContact(existing, seed) as Record<string, unknown>
+    ) as Omit<CrmAddressContact, "id">;
     if (existing) {
+      // Never overwrite createdBy/createdAt with missing values on update.
+      const { createdBy: _cb, createdAt: _ca, updatedAt: _ua, ...updatePayload } = merged;
       await updateDoc(doc(db, "crm_contacts", existing.id), {
-        ...merged,
+        ...stripUndefinedFields(updatePayload as Record<string, unknown>),
         updatedAt: serverTimestamp(),
       });
+      const idx = working.findIndex((c) => c.id === existing.id);
+      if (idx >= 0) working[idx] = { ...existing, ...merged };
       return "updated";
     }
-    await addDoc(collection(db, "crm_contacts"), {
+    const ref = await addDoc(collection(db, "crm_contacts"), {
       ...merged,
       createdBy: user?.uid || "",
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    working.push({ id: ref.id, ...merged });
     return "created";
   }
 
@@ -208,12 +217,16 @@ export function AddressBookClient() {
         zip: form.zip.trim(),
         country: form.country.trim(),
         notes: form.notes.trim(),
-        source: "manual",
+        source: editing?.source || "manual",
+        prepcorexUserId: editing?.prepcorexUserId,
       };
-      const merged = mergeSeedIntoContact(editing, seed);
+      const merged = stripUndefinedFields(
+        mergeSeedIntoContact(editing, seed) as Record<string, unknown>
+      ) as Omit<CrmAddressContact, "id">;
       if (editing) {
+        const { createdBy: _cb, createdAt: _ca, updatedAt: _ua, ...updatePayload } = merged;
         await updateDoc(doc(db, "crm_contacts", editing.id), {
-          ...merged,
+          ...stripUndefinedFields(updatePayload as Record<string, unknown>),
           updatedAt: serverTimestamp(),
         });
       } else {
@@ -235,18 +248,19 @@ export function AddressBookClient() {
   }
 
   async function syncCollection(
-    key: "leads" | "quotes" | "invoices",
+    key: Exclude<SyncKey, "prepcorex">,
     path: string,
     mapper: (data: Record<string, unknown>) => AddressBookSeed
   ) {
     setSyncing(key);
     try {
       const snap = await getDocs(collection(db, path));
+      const working = [...contacts];
       let created = 0;
       let updated = 0;
       let skipped = 0;
       for (const row of snap.docs) {
-        const result = await upsertSeed(mapper(row.data() as Record<string, unknown>));
+        const result = await upsertSeed(mapper(row.data() as Record<string, unknown>), working);
         if (result === "created") created += 1;
         else if (result === "updated") updated += 1;
         else skipped += 1;
@@ -262,6 +276,116 @@ export function AddressBookClient() {
       setSyncing("");
     }
   }
+
+  async function syncPrepCorexUsers() {
+    setSyncing("prepcorex");
+    try {
+      const snap = await getDocs(collection(db, "users"));
+      const working = [...contacts];
+      let created = 0;
+      let updated = 0;
+      let skippedStaff = 0;
+      let skippedIncomplete = 0;
+      for (const row of snap.docs) {
+        const mapped = mapPrepCorexUser(row.id, row.data() as Record<string, unknown>);
+        if (!mapped.ok) {
+          if (mapped.reason === "non_client") skippedStaff += 1;
+          else skippedIncomplete += 1;
+          continue;
+        }
+        const result = await upsertSeed(mapped.seed, working);
+        if (result === "created") created += 1;
+        else if (result === "updated") updated += 1;
+        else skippedIncomplete += 1;
+      }
+      toast({
+        title: "PrepCorex sync complete",
+        description: `${created} created, ${updated} updated. Skipped ${skippedStaff} staff accounts, ${skippedIncomplete} incomplete. Deleted and pending clients are included.`,
+      });
+    } catch (error) {
+      console.error(error);
+      toast({ variant: "destructive", title: "PrepCorex sync failed" });
+    } finally {
+      setSyncing("");
+    }
+  }
+
+  /**
+   * Pull sender name/email + signature phone/company from info@ + arshad@.
+   * Body is not stored. Outbound stays info@.
+   * @param opts.quiet — page-load auto sync: toast only when something changed / on error
+   */
+  async function syncEmailSenders(
+    mode?: "full" | "incremental",
+    opts?: { quiet?: boolean }
+  ) {
+    const quiet = opts?.quiet === true;
+    if (!user) {
+      if (!quiet) toast({ variant: "destructive", title: "Sign in required" });
+      return;
+    }
+    if (syncing !== "") return;
+    setSyncing("email");
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch("/api/email/sync-contacts", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(mode ? { mode } : {}),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        mode?: string;
+        created?: number;
+        updated?: number;
+        skipped?: number;
+        sendersFound?: number;
+        mailboxes?: Array<{ mailbox: string; messagesScanned: number; uniqueSenders: number; signaturesParsed?: number; error?: string }>;
+      };
+      if (!res.ok) {
+        throw new Error(data.error || "Email sync failed");
+      }
+      const created = data.created ?? 0;
+      const updated = data.updated ?? 0;
+      const sendersFound = data.sendersFound ?? 0;
+      const mailboxSummary = (data.mailboxes || [])
+        .map((m) =>
+          m.error
+            ? `${m.mailbox}: error`
+            : `${m.mailbox}: ${m.uniqueSenders} senders (${m.messagesScanned} msgs)`
+        )
+        .join(" · ");
+      const changed = created > 0 || updated > 0 || sendersFound > 0;
+      if (!quiet || changed) {
+        toast({
+          title: quiet
+            ? "Inbox contacts updated"
+            : `Email sync complete (${data.mode || "sync"})`,
+          description: `${created} created, ${updated} updated, ${sendersFound} senders. ${mailboxSummary}`,
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      toast({
+        variant: "destructive",
+        title: "Email sync failed",
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setSyncing("");
+    }
+  }
+
+  // Auto-sync inboxes when the address book page opens (once per visit).
+  useEffect(() => {
+    if (!user || autoEmailSyncStarted.current) return;
+    autoEmailSyncStarted.current = true;
+    void syncEmailSenders(undefined, { quiet: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional once-per-visit when user is ready
+  }, [user]);
 
   function resetFilters() {
     setSearch("");
@@ -282,10 +406,37 @@ export function AddressBookClient() {
               Address book
             </CardTitle>
             <CardDescription>
-              Unified contacts from leads, quotations, and invoices.
+              Unified contacts from PrepCorex users, email inboxes, leads, quotations, and invoices.
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void syncPrepCorexUsers()}
+              disabled={syncing !== ""}
+            >
+              {syncing === "prepcorex" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCcw className="mr-2 h-4 w-4" />
+              )}
+              Sync PrepCorex
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void syncEmailSenders()}
+              disabled={syncing !== "" || !user}
+              title="First run does a full inbox scan; later runs are incremental"
+            >
+              {syncing === "email" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCcw className="mr-2 h-4 w-4" />
+              )}
+              Sync emails
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -364,6 +515,8 @@ export function AddressBookClient() {
                 <SelectContent>
                   <SelectItem value="all">All sources</SelectItem>
                   <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="prepcorex">PrepCorex</SelectItem>
+                  <SelectItem value="email">Email</SelectItem>
                   <SelectItem value="lead">Lead</SelectItem>
                   <SelectItem value="quote">Quotation</SelectItem>
                   <SelectItem value="invoice">Invoice</SelectItem>
@@ -420,14 +573,15 @@ export function AddressBookClient() {
                   <th className="p-3">Email</th>
                   <th className="p-3">Phone</th>
                   <th className="p-3">Address</th>
+                  <th className="p-3">Source</th>
                   <th className="p-3">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td className="p-4 text-muted-foreground" colSpan={6}>Loading contacts...</td></tr>
+                  <tr><td className="p-4 text-muted-foreground" colSpan={7}>Loading contacts...</td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td className="p-4 text-muted-foreground" colSpan={6}>No contacts found.</td></tr>
+                  <tr><td className="p-4 text-muted-foreground" colSpan={7}>No contacts found.</td></tr>
                 ) : (
                   filtered.map((c) => (
                     <tr key={c.id} className="border-t">
@@ -436,6 +590,9 @@ export function AddressBookClient() {
                       <td className="p-3">{c.email || "—"}</td>
                       <td className="p-3">{c.phone || "—"}</td>
                       <td className="p-3">{[c.address, c.city, c.state, c.zip, c.country].filter(Boolean).join(", ") || "—"}</td>
+                      <td className="p-3">
+                        <Badge variant="secondary">{contactSourceLabel(c.source)}</Badge>
+                      </td>
                       <td className="p-3">
                         <Button variant="outline" size="sm" onClick={() => openEdit(c)}>Edit</Button>
                       </td>
@@ -450,4 +607,3 @@ export function AddressBookClient() {
     </div>
   );
 }
-

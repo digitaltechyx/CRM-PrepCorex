@@ -3,6 +3,7 @@ import type { AddressBookSeed } from "@/lib/crm-address-book";
 import {
   findExistingContact,
   getContactMatchKey,
+  isSpamContact,
   mergeSeedIntoContact,
   stripUndefinedFields,
   type CrmAddressContact,
@@ -396,6 +397,11 @@ async function upsertSenders(
     }
 
     const existing = findExistingContact(working, seed);
+    if (isSpamContact(existing)) {
+      skipped += 1;
+      continue;
+    }
+
     const merged = stripUndefinedFields(
       mergeSeedIntoContact(existing, seed) as Record<string, unknown>
     ) as Omit<CrmAddressContact, "id">;

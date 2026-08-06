@@ -25,6 +25,10 @@ export interface CrmAddressContact {
   source?: CrmContactSource;
   /** PrepCorex StockFlow user uid when synced from users collection. */
   prepcorexUserId?: string;
+  /** When true, contact is hidden from address book and blocked from all syncs. */
+  isSpam?: boolean;
+  spamMarkedAt?: unknown;
+  spamMarkedBy?: string;
   createdBy?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -97,6 +101,11 @@ export function contactSourceLabel(source?: string | null): string {
   return CRM_CONTACT_SOURCE_LABELS[key] || "Manual";
 }
 
+/** Spam contacts stay in Firestore so sync can match and skip forever. */
+export function isSpamContact(contact?: Pick<CrmAddressContact, "isSpam"> | null): boolean {
+  return contact?.isSpam === true;
+}
+
 /**
  * Find an existing contact to update instead of creating a duplicate.
  * Prefer PrepCorex uid, then email, then matchKey.
@@ -158,6 +167,17 @@ export function mergeSeedIntoContact(
       prepcorexUserId,
     }),
   };
+
+  // Preserve spam flags so sync merges never clear them.
+  if (current.isSpam === true) {
+    merged.isSpam = true;
+    if (current.spamMarkedAt != null) merged.spamMarkedAt = current.spamMarkedAt;
+    if (current.spamMarkedBy) merged.spamMarkedBy = current.spamMarkedBy;
+  } else if (seed.isSpam === true) {
+    merged.isSpam = true;
+    if (seed.spamMarkedAt != null) merged.spamMarkedAt = seed.spamMarkedAt;
+    if (seed.spamMarkedBy) merged.spamMarkedBy = seed.spamMarkedBy;
+  }
 
   // Only copy createdBy/createdAt when present — Firestore rejects `undefined`.
   if (current.createdBy) merged.createdBy = current.createdBy;

@@ -22,7 +22,8 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { BookUser, Loader2, Plus, RefreshCcw } from "lucide-react";
+import { BookUser, Loader2, Plus, RefreshCcw, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   type AddressBookSeed,
   type CrmAddressContact,
@@ -30,6 +31,7 @@ import {
   contactMatchesQuery,
   contactSourceLabel,
   findExistingContact,
+  isSpamContact,
   mapPrepCorexUser,
   mergeSeedIntoContact,
   stripUndefinedFields,
@@ -62,6 +64,13 @@ const EMPTY_FORM: ContactForm = {
 };
 
 type SyncKey = "leads" | "quotes" | "invoices" | "prepcorex" | "email";
+
+type AddressBookMode = "active" | "spam";
+
+type AddressBookClientProps = {
+  /** active = normal address book (hides spam). spam = spam folder. */
+  mode?: AddressBookMode;
+};
 
 function fromLead(data: Record<string, unknown>): AddressBookSeed {
   return {
@@ -104,7 +113,8 @@ function fromInvoice(data: Record<string, unknown>): AddressBookSeed {
   };
 }
 
-export function AddressBookClient() {
+export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
+  const isSpamMode = mode === "spam";
   const { user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
@@ -118,6 +128,8 @@ export function AddressBookClient() {
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState<"" | SyncKey>("");
   const [form, setForm] = useState<ContactForm>(EMPTY_FORM);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [spamBusy, setSpamBusy] = useState(false);
   const autoEmailSyncStarted = useRef(false);
 
   const contactsQuery = useMemo(
@@ -128,6 +140,7 @@ export function AddressBookClient() {
 
   const filtered = useMemo(() => {
     const base = contacts.filter((c) => {
+      if (isSpamMode ? !isSpamContact(c) : isSpamContact(c)) return false;
       if (!contactMatchesQuery(c, search)) return false;
       if (sourceFilter !== "all" && (c.source || "manual") !== sourceFilter) return false;
       if (countryFilter.trim() && !(c.country || "").toLowerCase().includes(countryFilter.trim().toLowerCase())) return false;
@@ -144,7 +157,32 @@ export function AddressBookClient() {
     if (sortBy === "name_desc") next.sort((a, b) => (b.fullName || "").localeCompare(a.fullName || "", undefined, { sensitivity: "base" }));
     if (sortBy === "company_asc") next.sort((a, b) => (a.company || "").localeCompare(b.company || "", undefined, { sensitivity: "base" }));
     return next;
-  }, [contacts, search, sourceFilter, countryFilter, companyFilter, completenessFilter, sortBy]);
+  }, [contacts, isSpamMode, search, sourceFilter, countryFilter, companyFilter, completenessFilter, sortBy]);
+
+  const visibleCount = useMemo(
+    () => contacts.filter((c) => (isSpamMode ? isSpamContact(c) : !isSpamContact(c))).length,
+    [contacts, isSpamMode]
+  );
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((c) => selectedIds.has(c.id));
+
+  function toggleSelectAllFiltered() {
+    if (allFilteredSelected) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(filtered.map((c) => c.id)));
+  }
+
+  function toggleSelectOne(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function openNew() {
     setEditing(null);
@@ -175,6 +213,7 @@ export function AddressBookClient() {
   ): Promise<"created" | "updated" | "skipped"> {
     if (!seed.fullName && !seed.email && !seed.phone && !seed.prepcorexUserId) return "skipped";
     const existing = findExistingContact(working, seed);
+    if (isSpamContact(existing)) return "skipped";
     const merged = stripUndefinedFields(
       mergeSeedIntoContact(existing, seed) as Record<string, unknown>
     ) as Omit<CrmAddressContact, "id">;
@@ -197,6 +236,47 @@ export function AddressBookClient() {
     });
     working.push({ id: ref.id, ...merged });
     return "created";
+  }
+
+  async function setSpamForSelected(markSpam: boolean) {
+    if (selectedIds.size === 0) {
+      toast({ variant: "destructive", title: "Select at least one contact." });
+      return;
+    }
+    setSpamBusy(true);
+    try {
+      const ids = [...selectedIds];
+      for (const id of ids) {
+        if (markSpam) {
+          await updateDoc(doc(db, "crm_contacts", id), {
+            isSpam: true,
+            spamMarkedAt: serverTimestamp(),
+            spamMarkedBy: user?.uid || "",
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await updateDoc(doc(db, "crm_contacts", id), {
+            isSpam: false,
+            spamMarkedAt: null,
+            spamMarkedBy: "",
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+      setSelectedIds(new Set());
+      toast({
+        title: markSpam ? "Marked as spam" : "Restored from spam",
+        description: `${ids.length} contact(s) updated. Spam contacts are excluded from future syncs.`,
+      });
+    } catch (error) {
+      console.error(error);
+      toast({
+        variant: "destructive",
+        title: markSpam ? "Failed to mark spam" : "Failed to restore contacts",
+      });
+    } finally {
+      setSpamBusy(false);
+    }
   }
 
   async function saveContact() {
@@ -381,11 +461,12 @@ export function AddressBookClient() {
 
   // Auto-sync inboxes when the address book page opens (once per visit).
   useEffect(() => {
+    if (isSpamMode) return;
     if (!user || autoEmailSyncStarted.current) return;
     autoEmailSyncStarted.current = true;
     void syncEmailSenders(undefined, { quiet: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional once-per-visit when user is ready
-  }, [user]);
+  }, [user, isSpamMode]);
 
   function resetFilters() {
     setSearch("");
@@ -394,6 +475,7 @@ export function AddressBookClient() {
     setSourceFilter("all");
     setCompletenessFilter("all");
     setSortBy("recent");
+    setSelectedIds(new Set());
   }
 
   return (
@@ -402,100 +484,127 @@ export function AddressBookClient() {
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2">
-              <BookUser className="h-5 w-5" />
-              Address book
+              {isSpamMode ? <ShieldAlert className="h-5 w-5" /> : <BookUser className="h-5 w-5" />}
+              {isSpamMode ? "Spam contacts" : "Address book"}
             </CardTitle>
             <CardDescription>
-              Unified contacts from PrepCorex users, email inboxes, leads, quotations, and invoices.
+              {isSpamMode
+                ? "Contacts marked as spam. They stay blocked from PrepCorex, email, lead, quotation, and invoice sync."
+                : "Unified contacts from PrepCorex users, email inboxes, leads, quotations, and invoices."}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void syncPrepCorexUsers()}
-              disabled={syncing !== ""}
-            >
-              {syncing === "prepcorex" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCcw className="mr-2 h-4 w-4" />
-              )}
-              Sync PrepCorex
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void syncEmailSenders()}
-              disabled={syncing !== "" || !user}
-              title="First run does a full inbox scan; later runs are incremental"
-            >
-              {syncing === "email" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCcw className="mr-2 h-4 w-4" />
-              )}
-              Sync emails
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => syncCollection("leads", "crmLeads", fromLead)}
-              disabled={syncing !== ""}
-            >
-              {syncing === "leads" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-              Sync leads
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => syncCollection("quotes", "quotes", fromQuote)}
-              disabled={syncing !== ""}
-            >
-              {syncing === "quotes" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-              Sync quotations
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => syncCollection("invoices", "external_invoices", fromInvoice)}
-              disabled={syncing !== ""}
-            >
-              {syncing === "invoices" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-              Sync invoices
-            </Button>
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" onClick={openNew}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  New contact
+            {!isSpamMode && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void syncPrepCorexUsers()}
+                  disabled={syncing !== ""}
+                >
+                  {syncing === "prepcorex" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="mr-2 h-4 w-4" />
+                  )}
+                  Sync PrepCorex
                 </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>{editing ? "Edit contact" : "New contact"}</DialogTitle>
-                </DialogHeader>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div><Label>Name</Label><Input value={form.fullName} onChange={(e) => setForm((p) => ({ ...p, fullName: e.target.value }))} /></div>
-                  <div><Label>Company</Label><Input value={form.company} onChange={(e) => setForm((p) => ({ ...p, company: e.target.value }))} /></div>
-                  <div><Label>Email</Label><Input value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} /></div>
-                  <div><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} /></div>
-                  <div className="md:col-span-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} /></div>
-                  <div><Label>City</Label><Input value={form.city} onChange={(e) => setForm((p) => ({ ...p, city: e.target.value }))} /></div>
-                  <div><Label>State</Label><Input value={form.state} onChange={(e) => setForm((p) => ({ ...p, state: e.target.value }))} /></div>
-                  <div><Label>Zip</Label><Input value={form.zip} onChange={(e) => setForm((p) => ({ ...p, zip: e.target.value }))} /></div>
-                  <div><Label>Country</Label><Input value={form.country} onChange={(e) => setForm((p) => ({ ...p, country: e.target.value }))} /></div>
-                  <div className="md:col-span-2"><Label>Notes</Label><Input value={form.notes} onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))} /></div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-                  <Button onClick={saveContact} disabled={saving}>
-                    {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Save
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void syncEmailSenders()}
+                  disabled={syncing !== "" || !user}
+                  title="First run does a full inbox scan; later runs are incremental"
+                >
+                  {syncing === "email" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="mr-2 h-4 w-4" />
+                  )}
+                  Sync emails
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => syncCollection("leads", "crmLeads", fromLead)}
+                  disabled={syncing !== ""}
+                >
+                  {syncing === "leads" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                  Sync leads
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => syncCollection("quotes", "quotes", fromQuote)}
+                  disabled={syncing !== ""}
+                >
+                  {syncing === "quotes" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                  Sync quotations
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => syncCollection("invoices", "external_invoices", fromInvoice)}
+                  disabled={syncing !== ""}
+                >
+                  {syncing === "invoices" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                  Sync invoices
+                </Button>
+                <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button size="sm" onClick={openNew}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      New contact
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle>{editing ? "Edit contact" : "New contact"}</DialogTitle>
+                    </DialogHeader>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div><Label>Name</Label><Input value={form.fullName} onChange={(e) => setForm((p) => ({ ...p, fullName: e.target.value }))} /></div>
+                      <div><Label>Company</Label><Input value={form.company} onChange={(e) => setForm((p) => ({ ...p, company: e.target.value }))} /></div>
+                      <div><Label>Email</Label><Input value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} /></div>
+                      <div><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} /></div>
+                      <div className="md:col-span-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} /></div>
+                      <div><Label>City</Label><Input value={form.city} onChange={(e) => setForm((p) => ({ ...p, city: e.target.value }))} /></div>
+                      <div><Label>State</Label><Input value={form.state} onChange={(e) => setForm((p) => ({ ...p, state: e.target.value }))} /></div>
+                      <div><Label>Zip</Label><Input value={form.zip} onChange={(e) => setForm((p) => ({ ...p, zip: e.target.value }))} /></div>
+                      <div><Label>Country</Label><Input value={form.country} onChange={(e) => setForm((p) => ({ ...p, country: e.target.value }))} /></div>
+                      <div className="md:col-span-2"><Label>Notes</Label><Input value={form.notes} onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))} /></div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+                      <Button onClick={saveContact} disabled={saving}>
+                        {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Save
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </>
+            )}
+            {isSpamMode ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void setSpamForSelected(false)}
+                disabled={spamBusy || selectedIds.size === 0}
+              >
+                {spamBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
+                Restore selected ({selectedIds.size})
+              </Button>
+            ) : (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => void setSpamForSelected(true)}
+                disabled={spamBusy || selectedIds.size === 0 || syncing !== ""}
+              >
+                {spamBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
+                Mark as spam ({selectedIds.size})
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -547,7 +656,9 @@ export function AddressBookClient() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">
               Showing <span className="font-semibold text-foreground">{filtered.length}</span> of{" "}
-              <span className="font-semibold text-foreground">{contacts.length}</span> contacts
+              <span className="font-semibold text-foreground">{visibleCount}</span>{" "}
+              {isSpamMode ? "spam contacts" : "contacts"}
+              {selectedIds.size > 0 ? ` · ${selectedIds.size} selected` : ""}
             </p>
             <div className="flex items-center gap-2">
               <div className="w-44">
@@ -568,6 +679,13 @@ export function AddressBookClient() {
             <table className="w-full text-sm">
               <thead className="bg-muted/40">
                 <tr className="text-left">
+                  <th className="w-10 p-3">
+                    <Checkbox
+                      checked={allFilteredSelected}
+                      onCheckedChange={() => toggleSelectAllFiltered()}
+                      aria-label="Select all filtered contacts"
+                    />
+                  </th>
                   <th className="p-3">Name</th>
                   <th className="p-3">Company</th>
                   <th className="p-3">Email</th>
@@ -579,12 +697,23 @@ export function AddressBookClient() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td className="p-4 text-muted-foreground" colSpan={7}>Loading contacts...</td></tr>
+                  <tr><td className="p-4 text-muted-foreground" colSpan={8}>Loading contacts...</td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td className="p-4 text-muted-foreground" colSpan={7}>No contacts found.</td></tr>
+                  <tr>
+                    <td className="p-4 text-muted-foreground" colSpan={8}>
+                      {isSpamMode ? "No spam contacts." : "No contacts found."}
+                    </td>
+                  </tr>
                 ) : (
                   filtered.map((c) => (
                     <tr key={c.id} className="border-t">
+                      <td className="p-3">
+                        <Checkbox
+                          checked={selectedIds.has(c.id)}
+                          onCheckedChange={() => toggleSelectOne(c.id)}
+                          aria-label={`Select ${c.fullName || c.email || "contact"}`}
+                        />
+                      </td>
                       <td className="p-3 font-medium">{c.fullName || "—"}</td>
                       <td className="p-3">{c.company || "—"}</td>
                       <td className="p-3">{c.email || "—"}</td>
@@ -594,7 +723,38 @@ export function AddressBookClient() {
                         <Badge variant="secondary">{contactSourceLabel(c.source)}</Badge>
                       </td>
                       <td className="p-3">
-                        <Button variant="outline" size="sm" onClick={() => openEdit(c)}>Edit</Button>
+                        {!isSpamMode ? (
+                          <Button variant="outline" size="sm" onClick={() => openEdit(c)}>Edit</Button>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={spamBusy}
+                            onClick={() => {
+                              setSelectedIds(new Set([c.id]));
+                              void (async () => {
+                                setSpamBusy(true);
+                                try {
+                                  await updateDoc(doc(db, "crm_contacts", c.id), {
+                                    isSpam: false,
+                                    spamMarkedAt: null,
+                                    spamMarkedBy: "",
+                                    updatedAt: serverTimestamp(),
+                                  });
+                                  setSelectedIds(new Set());
+                                  toast({ title: "Restored from spam", description: "Contact can sync again." });
+                                } catch (error) {
+                                  console.error(error);
+                                  toast({ variant: "destructive", title: "Failed to restore contact" });
+                                } finally {
+                                  setSpamBusy(false);
+                                }
+                              })();
+                            }}
+                          >
+                            Restore
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))

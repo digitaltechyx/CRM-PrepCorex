@@ -794,6 +794,16 @@ export function QuoteManagement() {
     const existing = await getDocs(
       query(collection(db, "crm_contacts"), where("matchKey", "==", matchKey))
     );
+    if (!existing.empty && existing.docs[0].data()?.isSpam === true) {
+      return;
+    }
+    // Also block by email if a spam contact already exists under another matchKey.
+    if (seed.email) {
+      const byEmail = crmContacts.find(
+        (c) => (c.email || "").trim().toLowerCase() === seed.email.toLowerCase() && c.isSpam === true
+      );
+      if (byEmail) return;
+    }
     const payload = {
       ...seed,
       matchKey,

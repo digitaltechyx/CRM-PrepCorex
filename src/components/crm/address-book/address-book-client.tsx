@@ -42,6 +42,8 @@ type ContactForm = {
   company: string;
   email: string;
   phone: string;
+  facebookMessengerId: string;
+  whatsappId: string;
   address: string;
   city: string;
   state: string;
@@ -55,6 +57,8 @@ const EMPTY_FORM: ContactForm = {
   company: "",
   email: "",
   phone: "",
+  facebookMessengerId: "",
+  whatsappId: "",
   address: "",
   city: "",
   state: "",
@@ -63,7 +67,7 @@ const EMPTY_FORM: ContactForm = {
   notes: "",
 };
 
-type SyncKey = "leads" | "quotes" | "invoices" | "prepcorex" | "email";
+type SyncKey = "leads" | "quotes" | "invoices" | "prepcorex" | "email" | "facebook" | "whatsapp";
 
 type AddressBookMode = "active" | "spam";
 
@@ -131,6 +135,7 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [spamBusy, setSpamBusy] = useState(false);
   const autoEmailSyncStarted = useRef(false);
+  const autoFacebookSyncStarted = useRef(false);
 
   const contactsQuery = useMemo(
     () => query(collection(db, "crm_contacts"), orderBy("updatedAt", "desc")),
@@ -197,6 +202,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
       company: contact.company || "",
       email: contact.email || "",
       phone: contact.phone || "",
+      facebookMessengerId: contact.facebookMessengerId || "",
+      whatsappId: contact.whatsappId || "",
       address: contact.address || "",
       city: contact.city || "",
       state: contact.state || "",
@@ -211,7 +218,16 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
     seed: AddressBookSeed,
     working: CrmAddressContact[]
   ): Promise<"created" | "updated" | "skipped"> {
-    if (!seed.fullName && !seed.email && !seed.phone && !seed.prepcorexUserId) return "skipped";
+    if (
+      !seed.fullName &&
+      !seed.email &&
+      !seed.phone &&
+      !seed.prepcorexUserId &&
+      !seed.facebookMessengerId &&
+      !seed.whatsappId
+    ) {
+      return "skipped";
+    }
     const existing = findExistingContact(working, seed);
     if (isSpamContact(existing)) return "skipped";
     const merged = stripUndefinedFields(
@@ -280,8 +296,17 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
   }
 
   async function saveContact() {
-    if (!form.fullName.trim() && !form.email.trim() && !form.phone.trim()) {
-      toast({ variant: "destructive", title: "Add at least name, email, or phone." });
+    if (
+      !form.fullName.trim() &&
+      !form.email.trim() &&
+      !form.phone.trim() &&
+      !form.facebookMessengerId.trim() &&
+      !form.whatsappId.trim()
+    ) {
+      toast({
+        variant: "destructive",
+        title: "Add at least name, email, phone, Messenger ID, or WhatsApp ID.",
+      });
       return;
     }
     setSaving(true);
@@ -291,6 +316,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
         company: form.company.trim(),
         email: form.email.trim(),
         phone: form.phone.trim(),
+        facebookMessengerId: form.facebookMessengerId.trim(),
+        whatsappId: form.whatsappId.trim(),
         address: form.address.trim(),
         city: form.city.trim(),
         state: form.state.trim(),
@@ -459,12 +486,151 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
     }
   }
 
+  /**
+   * Pull people who messaged the Facebook Page (name + Messenger PSID).
+   * @param opts.quiet — page-load auto sync: toast only when something changed / on real errors
+   */
+  async function syncFacebookMessenger(opts?: { quiet?: boolean }) {
+    const quiet = opts?.quiet === true;
+    if (!user) {
+      if (!quiet) toast({ variant: "destructive", title: "Sign in required" });
+      return;
+    }
+    if (!quiet) {
+      if (syncing !== "") return;
+      setSyncing("facebook");
+    }
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch("/api/facebook/sync-contacts", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(quiet ? { quiet: true } : {}),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        configured?: boolean;
+        created?: number;
+        updated?: number;
+        skipped?: number;
+        contactsFound?: number;
+        conversationsScanned?: number;
+      };
+      if (!res.ok) {
+        throw new Error(data.error || "Facebook sync failed");
+      }
+      if (data.configured === false) {
+        if (!quiet) {
+          toast({
+            variant: "destructive",
+            title: "Facebook not configured",
+            description:
+              data.error ||
+              "Set FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN in the CRM env.",
+          });
+        }
+        return;
+      }
+      const created = data.created ?? 0;
+      const updated = data.updated ?? 0;
+      const contactsFound = data.contactsFound ?? 0;
+      const changed = created > 0 || updated > 0 || contactsFound > 0;
+      if (!quiet || changed) {
+        toast({
+          title: quiet ? "Facebook contacts updated" : "Facebook sync complete",
+          description: `${created} created, ${updated} updated, ${contactsFound} Messenger contacts (${data.conversationsScanned ?? 0} conversations).`,
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : undefined;
+      if (!quiet || !/not configured/i.test(message || "")) {
+        toast({
+          variant: "destructive",
+          title: "Facebook sync failed",
+          description: message,
+        });
+      }
+    } finally {
+      if (!quiet) setSyncing("");
+    }
+  }
+
+  /** WhatsApp Cloud API has no bulk pull — this checks webhook/API config status. */
+  async function checkWhatsAppStatus() {
+    if (!user) {
+      toast({ variant: "destructive", title: "Sign in required" });
+      return;
+    }
+    if (syncing !== "") return;
+    setSyncing("whatsapp");
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch("/api/whatsapp/status", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        configured?: boolean;
+        webhookUrl?: string;
+        apiPing?: {
+          ok?: boolean;
+          error?: string;
+          displayPhoneNumber?: string;
+          verifiedName?: string;
+        };
+        note?: string;
+      };
+      if (!res.ok) {
+        throw new Error(data.error || "WhatsApp status check failed");
+      }
+      const ping = data.apiPing;
+      const pingLine = ping
+        ? ping.ok
+          ? `API OK${ping.verifiedName ? ` · ${ping.verifiedName}` : ""}${
+              ping.displayPhoneNumber ? ` · ${ping.displayPhoneNumber}` : ""
+            }`
+          : `API: ${ping.error || "not checked"}`
+        : "API token/phone id not set (webhook can still work)";
+      toast({
+        title: data.configured ? "WhatsApp webhook ready" : "WhatsApp not configured",
+        description: `${pingLine}. Contacts appear when people message you. ${data.webhookUrl || ""}`,
+      });
+    } catch (error) {
+      console.error(error);
+      toast({
+        variant: "destructive",
+        title: "WhatsApp status failed",
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setSyncing("");
+    }
+  }
+
   // Auto-sync inboxes when the address book page opens (once per visit).
   useEffect(() => {
     if (isSpamMode) return;
     if (!user || autoEmailSyncStarted.current) return;
     autoEmailSyncStarted.current = true;
     void syncEmailSenders(undefined, { quiet: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional once-per-visit when user is ready
+  }, [user, isSpamMode]);
+
+  // Auto-sync Facebook Messenger contacts once per visit when configured.
+  useEffect(() => {
+    if (isSpamMode) return;
+    if (!user || autoFacebookSyncStarted.current) return;
+    autoFacebookSyncStarted.current = true;
+    void syncFacebookMessenger({ quiet: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional once-per-visit when user is ready
   }, [user, isSpamMode]);
 
@@ -489,8 +655,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
             </CardTitle>
             <CardDescription>
               {isSpamMode
-                ? "Contacts marked as spam. They stay blocked from PrepCorex, email, lead, quotation, and invoice sync."
-                : "Unified contacts from PrepCorex users, email inboxes, leads, quotations, and invoices."}
+                ? "Contacts marked as spam. They stay blocked from PrepCorex, email, Facebook, WhatsApp, lead, quotation, and invoice sync."
+                : "Unified contacts from PrepCorex, email, Facebook Messenger, WhatsApp Cloud API, leads, quotations, and invoices."}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -522,6 +688,34 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                     <RefreshCcw className="mr-2 h-4 w-4" />
                   )}
                   Sync emails
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void syncFacebookMessenger()}
+                  disabled={syncing !== "" || !user}
+                  title="People who messaged your Facebook Page"
+                >
+                  {syncing === "facebook" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="mr-2 h-4 w-4" />
+                  )}
+                  Sync Facebook
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void checkWhatsAppStatus()}
+                  disabled={syncing !== "" || !user}
+                  title="WhatsApp contacts arrive via webhook when people message you"
+                >
+                  {syncing === "whatsapp" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="mr-2 h-4 w-4" />
+                  )}
+                  WhatsApp status
                 </Button>
                 <Button
                   variant="outline"
@@ -566,6 +760,24 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                       <div><Label>Company</Label><Input value={form.company} onChange={(e) => setForm((p) => ({ ...p, company: e.target.value }))} /></div>
                       <div><Label>Email</Label><Input value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} /></div>
                       <div><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} /></div>
+                      <div className="md:col-span-2">
+                        <Label>Messenger ID</Label>
+                        <Input
+                          value={form.facebookMessengerId}
+                          onChange={(e) =>
+                            setForm((p) => ({ ...p, facebookMessengerId: e.target.value }))
+                          }
+                          placeholder="Page-scoped ID from Facebook sync"
+                        />
+                      </div>
+                      <div className="md:col-span-2">
+                        <Label>WhatsApp ID</Label>
+                        <Input
+                          value={form.whatsappId}
+                          onChange={(e) => setForm((p) => ({ ...p, whatsappId: e.target.value }))}
+                          placeholder="Digits from WhatsApp Cloud API (wa_id)"
+                        />
+                      </div>
                       <div className="md:col-span-2"><Label>Address</Label><Input value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} /></div>
                       <div><Label>City</Label><Input value={form.city} onChange={(e) => setForm((p) => ({ ...p, city: e.target.value }))} /></div>
                       <div><Label>State</Label><Input value={form.state} onChange={(e) => setForm((p) => ({ ...p, state: e.target.value }))} /></div>
@@ -612,7 +824,7 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
             <div className="lg:col-span-2">
               <Label className="mb-1 block text-xs text-muted-foreground">Search</Label>
               <Input
-                placeholder="Name, email, company, phone..."
+                placeholder="Name, email, company, phone, Messenger, WhatsApp..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -626,6 +838,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                   <SelectItem value="manual">Manual</SelectItem>
                   <SelectItem value="prepcorex">PrepCorex</SelectItem>
                   <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="facebook">Facebook</SelectItem>
+                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
                   <SelectItem value="lead">Lead</SelectItem>
                   <SelectItem value="quote">Quotation</SelectItem>
                   <SelectItem value="invoice">Invoice</SelectItem>
@@ -690,6 +904,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                   <th className="p-3">Company</th>
                   <th className="p-3">Email</th>
                   <th className="p-3">Phone</th>
+                  <th className="p-3">Messenger</th>
+                  <th className="p-3">WhatsApp</th>
                   <th className="p-3">Address</th>
                   <th className="p-3">Source</th>
                   <th className="p-3">Actions</th>
@@ -697,10 +913,10 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td className="p-4 text-muted-foreground" colSpan={8}>Loading contacts...</td></tr>
+                  <tr><td className="p-4 text-muted-foreground" colSpan={10}>Loading contacts...</td></tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td className="p-4 text-muted-foreground" colSpan={8}>
+                    <td className="p-4 text-muted-foreground" colSpan={10}>
                       {isSpamMode ? "No spam contacts." : "No contacts found."}
                     </td>
                   </tr>
@@ -718,6 +934,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                       <td className="p-3">{c.company || "—"}</td>
                       <td className="p-3">{c.email || "—"}</td>
                       <td className="p-3">{c.phone || "—"}</td>
+                      <td className="p-3 font-mono text-xs">{c.facebookMessengerId || "—"}</td>
+                      <td className="p-3 font-mono text-xs">{c.whatsappId || "—"}</td>
                       <td className="p-3">{[c.address, c.city, c.state, c.zip, c.country].filter(Boolean).join(", ") || "—"}</td>
                       <td className="p-3">
                         <Badge variant="secondary">{contactSourceLabel(c.source)}</Badge>

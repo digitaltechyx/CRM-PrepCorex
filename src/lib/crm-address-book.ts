@@ -1,4 +1,12 @@
-export type CrmContactSource = "manual" | "lead" | "quote" | "invoice" | "prepcorex" | "email";
+export type CrmContactSource =
+  | "manual"
+  | "lead"
+  | "quote"
+  | "invoice"
+  | "prepcorex"
+  | "email"
+  | "facebook"
+  | "whatsapp";
 
 export const CRM_CONTACT_SOURCE_LABELS: Record<CrmContactSource, string> = {
   manual: "Manual",
@@ -7,6 +15,8 @@ export const CRM_CONTACT_SOURCE_LABELS: Record<CrmContactSource, string> = {
   invoice: "Invoice",
   prepcorex: "PrepCorex",
   email: "Email",
+  facebook: "Facebook",
+  whatsapp: "WhatsApp",
 };
 
 export interface CrmAddressContact {
@@ -25,6 +35,10 @@ export interface CrmAddressContact {
   source?: CrmContactSource;
   /** PrepCorex StockFlow user uid when synced from users collection. */
   prepcorexUserId?: string;
+  /** Facebook Page-scoped Messenger ID (PSID) when synced from Page conversations. */
+  facebookMessengerId?: string;
+  /** WhatsApp ID (digits, usually same as phone without +). */
+  whatsappId?: string;
   /** When true, contact is hidden from address book and blocked from all syncs. */
   isSpam?: boolean;
   spamMarkedAt?: unknown;
@@ -37,6 +51,8 @@ export interface CrmAddressContact {
 export type AddressBookSeed = Partial<Omit<CrmAddressContact, "id" | "matchKey">> & {
   fullName?: string;
   prepcorexUserId?: string;
+  facebookMessengerId?: string;
+  whatsappId?: string;
 };
 
 function norm(v?: string): string {
@@ -51,7 +67,16 @@ function normPhone(v?: string): string {
   return (v || "").replace(/[^\d+]/g, "");
 }
 
+/** Digits-only WhatsApp id (E.164 without +). */
+export function normalizeWhatsAppId(v?: string): string {
+  return (v || "").replace(/\D/g, "");
+}
+
 export function getContactMatchKey(seed: AddressBookSeed): string {
+  const facebookMessengerId = norm(seed.facebookMessengerId);
+  if (facebookMessengerId) return `facebook:${facebookMessengerId}`;
+  const whatsappId = normalizeWhatsAppId(seed.whatsappId);
+  if (whatsappId) return `whatsapp:${whatsappId}`;
   const prepcorexUserId = norm(seed.prepcorexUserId);
   if (prepcorexUserId) return `prepcorex:${prepcorexUserId}`;
   const email = normLower(seed.email);
@@ -69,6 +94,8 @@ export function toSearchBlob(contact: AddressBookSeed): string {
     contact.company,
     contact.email,
     contact.phone,
+    contact.facebookMessengerId,
+    contact.whatsappId,
     contact.address,
     contact.city,
     contact.state,
@@ -108,12 +135,30 @@ export function isSpamContact(contact?: Pick<CrmAddressContact, "isSpam"> | null
 
 /**
  * Find an existing contact to update instead of creating a duplicate.
- * Prefer PrepCorex uid, then email, then matchKey.
+ * Prefer Facebook PSID, WhatsApp id, PrepCorex uid, email/phone, then matchKey.
  */
 export function findExistingContact(
   contacts: CrmAddressContact[],
   seed: AddressBookSeed
 ): CrmAddressContact | null {
+  const facebookMessengerId = norm(seed.facebookMessengerId);
+  if (facebookMessengerId) {
+    const byMessenger = contacts.find(
+      (c) => norm(c.facebookMessengerId) === facebookMessengerId
+    );
+    if (byMessenger) return byMessenger;
+  }
+
+  const whatsappId = normalizeWhatsAppId(seed.whatsappId);
+  if (whatsappId) {
+    const byWa = contacts.find((c) => normalizeWhatsAppId(c.whatsappId) === whatsappId);
+    if (byWa) return byWa;
+    const byPhoneDigits = contacts.find(
+      (c) => normalizeWhatsAppId(c.phone) === whatsappId
+    );
+    if (byPhoneDigits) return byPhoneDigits;
+  }
+
   const prepcorexUserId = norm(seed.prepcorexUserId);
   if (prepcorexUserId) {
     const byUid = contacts.find((c) => norm(c.prepcorexUserId) === prepcorexUserId);
@@ -124,6 +169,12 @@ export function findExistingContact(
   if (email) {
     const byEmail = contacts.find((c) => normLower(c.email) === email);
     if (byEmail) return byEmail;
+  }
+
+  const phone = normPhone(seed.phone);
+  if (phone) {
+    const byPhone = contacts.find((c) => normPhone(c.phone) === phone);
+    if (byPhone) return byPhone;
   }
 
   const key = getContactMatchKey(seed);
@@ -144,6 +195,10 @@ export function mergeSeedIntoContact(
   const email = norm(seed.email) || norm(current.email);
   const phone = norm(seed.phone) || norm(current.phone);
   const prepcorexUserId = norm(seed.prepcorexUserId) || norm(current.prepcorexUserId);
+  const facebookMessengerId =
+    norm(seed.facebookMessengerId) || norm(current.facebookMessengerId);
+  const whatsappId =
+    normalizeWhatsAppId(seed.whatsappId) || normalizeWhatsAppId(current.whatsappId);
 
   const merged: Omit<CrmAddressContact, "id"> = {
     fullName,
@@ -159,12 +214,16 @@ export function mergeSeedIntoContact(
     // Keep original source on update so we don't rewrite "Lead" → "PrepCorex" on merge.
     source: (existing?.source || seed.source || "manual") as CrmContactSource,
     prepcorexUserId: prepcorexUserId || undefined,
+    facebookMessengerId: facebookMessengerId || undefined,
+    whatsappId: whatsappId || undefined,
     matchKey: getContactMatchKey({
       fullName,
       company,
       email,
       phone,
       prepcorexUserId,
+      facebookMessengerId,
+      whatsappId,
     }),
   };
 

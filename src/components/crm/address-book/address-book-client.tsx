@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDocs,
   query,
@@ -12,7 +13,6 @@ import {
   orderBy,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { useCollection } from "@/hooks/use-collection";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
@@ -22,8 +22,19 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { BookUser, Loader2, Plus, RefreshCcw, ShieldAlert, ShieldCheck } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { BookUser, Loader2, Plus, RefreshCcw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useCollection } from "@/hooks/use-collection";
 import {
   type AddressBookSeed,
   type CrmAddressContact,
@@ -134,6 +145,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
   const [form, setForm] = useState<ContactForm>(EMPTY_FORM);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [spamBusy, setSpamBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const autoEmailSyncStarted = useRef(false);
   const autoFacebookSyncStarted = useRef(false);
 
@@ -292,6 +305,35 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
       });
     } finally {
       setSpamBusy(false);
+    }
+  }
+
+  async function deleteSelectedContacts() {
+    if (selectedIds.size === 0) {
+      toast({ variant: "destructive", title: "Select at least one contact." });
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      const ids = [...selectedIds];
+      for (const id of ids) {
+        await deleteDoc(doc(db, "crm_contacts", id));
+      }
+      setSelectedIds(new Set());
+      setDeleteConfirmOpen(false);
+      toast({
+        title: "Contacts deleted",
+        description: `${ids.length} contact(s) removed. Sync can recreate them if they appear again from PrepCorex, email, or other sources.`,
+      });
+    } catch (error) {
+      console.error(error);
+      toast({
+        variant: "destructive",
+        title: "Failed to delete contacts",
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -801,7 +843,7 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                 variant="outline"
                 size="sm"
                 onClick={() => void setSpamForSelected(false)}
-                disabled={spamBusy || selectedIds.size === 0}
+                disabled={spamBusy || deleteBusy || selectedIds.size === 0}
               >
                 {spamBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
                 Restore selected ({selectedIds.size})
@@ -811,12 +853,28 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                 variant="destructive"
                 size="sm"
                 onClick={() => void setSpamForSelected(true)}
-                disabled={spamBusy || selectedIds.size === 0 || syncing !== ""}
+                disabled={spamBusy || deleteBusy || selectedIds.size === 0 || syncing !== ""}
               >
                 {spamBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
                 Mark as spam ({selectedIds.size})
               </Button>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => {
+                if (selectedIds.size === 0) {
+                  toast({ variant: "destructive", title: "Select at least one contact." });
+                  return;
+                }
+                setDeleteConfirmOpen(true);
+              }}
+              disabled={spamBusy || deleteBusy || selectedIds.size === 0 || syncing !== ""}
+            >
+              {deleteBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              Delete ({selectedIds.size})
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -982,6 +1040,41 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
           </div>
         </CardContent>
       </Card>
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {selectedIds.size} contact{selectedIds.size === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the selected contact(s) from the address book.
+              Unlike spam, deleted contacts can reappear after the next PrepCorex, email, Facebook,
+              or other sync if they still exist in those sources.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteBusy}
+              onClick={(e) => {
+                e.preventDefault();
+                void deleteSelectedContacts();
+              }}
+            >
+              {deleteBusy ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting…
+                </>
+              ) : (
+                "Delete"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

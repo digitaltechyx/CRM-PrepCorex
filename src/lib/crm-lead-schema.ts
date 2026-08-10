@@ -123,4 +123,8 @@ export interface CrmLeadInput {
   country?: string;
   businessType?: BusinessType | "";
   notes?: string;
+  /** Defaults to new_lead when omitted (e.g. Quick add). */
+  status?: LeadStatus;
+  /** Address book contact this lead was created from. */
+  contactId?: string;
 }

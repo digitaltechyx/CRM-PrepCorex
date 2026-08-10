@@ -32,7 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { BookUser, Loader2, Plus, RefreshCcw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
+import { BookUser, Loader2, Plus, RefreshCcw, ShieldAlert, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCollection } from "@/hooks/use-collection";
 import {
@@ -47,6 +47,7 @@ import {
   mergeSeedIntoContact,
   stripUndefinedFields,
 } from "@/lib/crm-address-book";
+import { ConvertContactToLeadDialog } from "@/components/crm/address-book/convert-contact-to-lead-dialog";
 
 type ContactForm = {
   fullName: string;
@@ -147,6 +148,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
   const [spamBusy, setSpamBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [convertContacts, setConvertContacts] = useState<CrmAddressContact[]>([]);
   const autoEmailSyncStarted = useRef(false);
   const autoFacebookSyncStarted = useRef(false);
 
@@ -225,6 +228,15 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
       notes: contact.notes || "",
     });
     setDialogOpen(true);
+  }
+
+  function openConvertToLead(contactsToConvert: CrmAddressContact[]) {
+    if (contactsToConvert.length === 0) {
+      toast({ variant: "destructive", title: "Select at least one contact." });
+      return;
+    }
+    setConvertContacts(contactsToConvert);
+    setConvertOpen(true);
   }
 
   async function upsertSeed(
@@ -849,15 +861,29 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                 Restore selected ({selectedIds.size})
               </Button>
             ) : (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => void setSpamForSelected(true)}
-                disabled={spamBusy || deleteBusy || selectedIds.size === 0 || syncing !== ""}
-              >
-                {spamBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
-                Mark as spam ({selectedIds.size})
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const selected = contacts.filter((c) => selectedIds.has(c.id) && !isSpamContact(c));
+                    openConvertToLead(selected);
+                  }}
+                  disabled={deleteBusy || selectedIds.size === 0 || syncing !== ""}
+                >
+                  <UserPlus className="mr-2 h-4 w-4" />
+                  Convert to lead ({selectedIds.size})
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => void setSpamForSelected(true)}
+                  disabled={spamBusy || deleteBusy || selectedIds.size === 0 || syncing !== ""}
+                >
+                  {spamBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
+                  Mark as spam ({selectedIds.size})
+                </Button>
+              </>
             )}
             <Button
               variant="outline"
@@ -1000,7 +1026,15 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                       </td>
                       <td className="p-3">
                         {!isSpamMode ? (
-                          <Button variant="outline" size="sm" onClick={() => openEdit(c)}>Edit</Button>
+                          <div className="flex flex-wrap gap-2">
+                            <Button variant="outline" size="sm" onClick={() => openEdit(c)}>
+                              Edit
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => openConvertToLead([c])}>
+                              <UserPlus className="mr-1.5 h-3.5 w-3.5" />
+                              To lead
+                            </Button>
+                          </div>
                         ) : (
                           <Button
                             variant="outline"
@@ -1075,6 +1109,16 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ConvertContactToLeadDialog
+        open={convertOpen}
+        onOpenChange={(open) => {
+          setConvertOpen(open);
+          if (!open) setConvertContacts([]);
+        }}
+        contacts={convertContacts}
+        onConverted={() => setSelectedIds(new Set())}
+      />
     </div>
   );
 }

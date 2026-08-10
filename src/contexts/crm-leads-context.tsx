@@ -200,7 +200,7 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
     async (input: CrmLeadInput): Promise<string> => {
       if (!user?.uid) throw new Error("Not signed in");
       const now = new Date();
-      const status: LeadStatus = "new_lead";
+      const status: LeadStatus = normalizeStatus(input.status ?? "new_lead");
       const nextTs = computeNextFollowUp(status, now);
       const ref = await addDoc(collection(db, COLLECTION), {
         leadName: input.leadName.trim(),
@@ -216,13 +216,17 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
         lastContactAt: serverTimestamp(),
         nextFollowUpAt: nextTs,
         notes: input.notes?.trim() || "",
+        ...(input.contactId ? { contactId: input.contactId } : {}),
+        ...(status === "client" ? { convertedAt: serverTimestamp() } : {}),
         createdByUid: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
       await appendTimeline(ref.id, {
         type: "system",
-        text: `Lead created (${input.leadName})`,
+        text: input.contactId
+          ? `Lead created from address book (${input.leadName}) · status: ${status}`
+          : `Lead created (${input.leadName}) · status: ${status}`,
         byUid: user.uid,
       });
       if (input.notes?.trim()) {

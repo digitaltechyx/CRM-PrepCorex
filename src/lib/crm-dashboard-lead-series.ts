@@ -61,17 +61,34 @@ export function buildLeadsCreatedSeries(leads: CrmLead[], days: number, now = ne
 
 export type StatusCountRow = { key: LeadStatus; name: string; count: number };
 
-export function buildStatusCounts(leads: CrmLead[]): StatusCountRow[] {
-  const map = new Map<LeadStatus, number>();
-  for (const s of PIPELINE_STATUSES) map.set(s, 0);
+export function buildStatusCounts(
+  leads: CrmLead[],
+  pipeline?: Array<{ id: string; label: string }>
+): StatusCountRow[] {
+  const columns =
+    pipeline && pipeline.length > 0
+      ? pipeline
+      : PIPELINE_STATUSES.map((id) => ({
+          id,
+          label: STATUS_LABELS[id as keyof typeof STATUS_LABELS] || id,
+        }));
+
+  const counts = new Map<string, number>();
+  for (const col of columns) counts.set(col.id, 0);
   for (const l of leads) {
-    const c = map.get(l.status) ?? 0;
-    map.set(l.status, c + 1);
+    counts.set(l.status, (counts.get(l.status) ?? 0) + 1);
   }
-  return PIPELINE_STATUSES.map((key) => ({
+
+  const labelById = new Map(columns.map((c) => [c.id, c.label]));
+  const orderedIds = [
+    ...columns.map((c) => c.id),
+    ...[...counts.keys()].filter((id) => !labelById.has(id)),
+  ];
+
+  return orderedIds.map((key) => ({
     key,
-    name: STATUS_LABELS[key],
-    count: map.get(key) ?? 0,
+    name: labelById.get(key) || STATUS_LABELS[key as keyof typeof STATUS_LABELS] || key,
+    count: counts.get(key) ?? 0,
   }));
 }
 

@@ -31,8 +31,8 @@ import {
   type TimelineEntryType,
   defaultFollowUpDaysForStatus,
   addDays,
-  LEAD_STATUSES,
 } from "@/lib/crm-lead-schema";
+import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 
 const COLLECTION = "crmLeads";
 
@@ -70,8 +70,8 @@ export interface CrmTimelineEntry {
 
 
 function normalizeStatus(v: unknown): LeadStatus {
-  const s = String(v || "");
-  return (LEAD_STATUSES as readonly string[]).includes(s) ? (s as LeadStatus) : "new_lead";
+  const s = String(v || "").trim();
+  return s || "new_lead";
 }
 
 function normalizeLead(id: string, data: Record<string, unknown>): CrmLead {
@@ -136,6 +136,7 @@ const CrmLeadsContext = createContext<CrmLeadsContextValue | null>(null);
 
 export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
   const { user, userProfile } = useAuth();
+  const { followUpDaysFor, getLabel } = useCrmPipeline();
   const [leads, setLeads] = useState<CrmLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -191,10 +192,10 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
   );
 
   const computeNextFollowUp = useCallback((status: LeadStatus, from: Date): TimestampType | null => {
-    const days = defaultFollowUpDaysForStatus(status);
+    const days = followUpDaysFor(status) ?? defaultFollowUpDaysForStatus(status);
     if (days == null) return null;
     return Timestamp.fromDate(addDays(from, days));
-  }, []);
+  }, [followUpDaysFor]);
 
   const createLead = useCallback(
     async (input: CrmLeadInput): Promise<string> => {
@@ -225,8 +226,8 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
       await appendTimeline(ref.id, {
         type: "system",
         text: input.contactId
-          ? `Lead created from address book (${input.leadName}) · status: ${status}`
-          : `Lead created (${input.leadName}) · status: ${status}`,
+          ? `Lead created from address book (${input.leadName}) · status: ${getLabel(status)}`
+          : `Lead created (${input.leadName}) · status: ${getLabel(status)}`,
         byUid: user.uid,
       });
       if (input.notes?.trim()) {
@@ -238,7 +239,7 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
       }
       return ref.id;
     },
-    [user?.uid, appendTimeline, computeNextFollowUp]
+    [user?.uid, appendTimeline, computeNextFollowUp, getLabel]
   );
 
   const updateLeadStatus = useCallback(
@@ -263,14 +264,14 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
       if (prev && prev !== newStatus) {
         await appendTimeline(leadId, {
           type: "status_change",
-          text: `Status: ${prev} → ${newStatus}`,
+          text: `Status: ${getLabel(prev)} → ${getLabel(newStatus)}`,
           byUid: userUid,
           fromStatus: prev,
           toStatus: newStatus,
         });
       }
     },
-    [leads, appendTimeline, computeNextFollowUp]
+    [leads, appendTimeline, computeNextFollowUp, getLabel]
   );
 
   const updateLead = useCallback(async (leadId: string, patch: CrmLeadUpdatePatch) => {

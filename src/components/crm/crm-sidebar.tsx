@@ -10,6 +10,7 @@ import {
   BookUser,
   ShieldAlert,
   LogOut,
+  Columns3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ const nav = [
   { title: "Leads", href: "/dashboard/leads", icon: Users },
   { title: "Address book", href: "/dashboard/contacts", icon: BookUser },
   { title: "Spam", href: "/dashboard/spam", icon: ShieldAlert },
+  { title: "Pipeline", href: "/dashboard/settings/pipeline", icon: Columns3 },
   { title: "Quote management", href: "/dashboard/quotes", icon: Briefcase },
   { title: "Invoice management", href: "/dashboard/invoice-portal", icon: Receipt },
 ];

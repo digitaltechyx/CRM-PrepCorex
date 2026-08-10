@@ -9,8 +9,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PLATFORM_SOURCES, PLATFORM_LABELS, LEAD_STATUSES, STATUS_LABELS } from "@/lib/crm-lead-schema";
+import { PLATFORM_SOURCES, PLATFORM_LABELS } from "@/lib/crm-lead-schema";
 import type { PlatformSource, LeadStatus } from "@/lib/crm-lead-schema";
+import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 
 type Props = {
   search: string;
@@ -33,6 +34,7 @@ export function LeadsToolbar({
   country,
   onCountryChange,
 }: Props) {
+  const { statuses, getLabel } = useCrmPipeline();
   return (
     <div className="rounded-2xl border border-border/70 bg-card/70 p-4 shadow-sm ring-1 ring-black/[0.03] backdrop-blur-sm dark:bg-card/50 dark:ring-white/[0.05]">
       <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Filters</p>
@@ -73,9 +75,10 @@ export function LeadsToolbar({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
-            {LEAD_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                {STATUS_LABELS[s]}
+            {statuses.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {getLabel(s.id)}
+                {s.hidden ? " (hidden)" : ""}
               </SelectItem>
             ))}
           </SelectContent>

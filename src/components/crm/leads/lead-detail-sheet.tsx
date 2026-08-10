@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -34,8 +34,6 @@ import { useCrmLeads } from "@/contexts/crm-leads-context";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import {
-  LEAD_STATUSES,
-  STATUS_LABELS,
   PLATFORM_SOURCES,
   PLATFORM_LABELS,
   BUSINESS_TYPES,
@@ -43,6 +41,7 @@ import {
   type LeadStatus,
   type PlatformSource,
 } from "@/lib/crm-lead-schema";
+import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 import { firestoreTimestampToDate } from "@/lib/crm-date-utils";
 import { format } from "date-fns";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
@@ -91,6 +90,15 @@ export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
   const { toast } = useToast();
   const { updateLead, updateLeadStatus, addTimelineNote, updateTimelineNote, deleteTimelineNote, subscribeTimeline } =
     useCrmLeads();
+  const { visibleStatuses, statuses, getLabel } = useCrmPipeline();
+  const statusOptions = useMemo(() => {
+    const visibleIds = new Set(visibleStatuses.map((s) => s.id));
+    const extra =
+      lead?.status && !visibleIds.has(lead.status)
+        ? statuses.filter((s) => s.id === lead.status)
+        : [];
+    return [...visibleStatuses, ...extra];
+  }, [visibleStatuses, statuses, lead?.status]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [timeline, setTimeline] = useState<CrmTimelineEntry[]>([]);
   const [note, setNote] = useState("");
@@ -233,9 +241,9 @@ export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {LEAD_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {STATUS_LABELS[s]}
+                  {statusOptions.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {getLabel(s.id)}
                     </SelectItem>
                   ))}
                 </SelectContent>

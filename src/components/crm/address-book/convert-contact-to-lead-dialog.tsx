@@ -20,13 +20,9 @@ import {
 } from "@/components/ui/select";
 import { useCrmLeads } from "@/contexts/crm-leads-context";
 import { useToast } from "@/hooks/use-toast";
-import {
-  LEAD_STATUSES,
-  STATUS_LABELS,
-  type LeadStatus,
-  type PlatformSource,
-} from "@/lib/crm-lead-schema";
+import { type LeadStatus, type PlatformSource } from "@/lib/crm-lead-schema";
 import { getContactMatchKey, type CrmAddressContact, type CrmContactSource } from "@/lib/crm-address-book";
+import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 import { Loader2, UserPlus } from "lucide-react";
 
 function mapContactSourceToPlatform(source?: CrmContactSource): PlatformSource {
@@ -63,6 +59,7 @@ type Props = {
 
 export function ConvertContactToLeadDialog({ open, onOpenChange, contacts, onConverted }: Props) {
   const { createLead, leads } = useCrmLeads();
+  const { visibleStatuses, getLabel } = useCrmPipeline();
   const { toast } = useToast();
   const [status, setStatus] = useState<LeadStatus>("new_lead");
   const [saving, setSaving] = useState(false);
@@ -135,8 +132,8 @@ export function ConvertContactToLeadDialog({ open, onOpenChange, contacts, onCon
         title: created === 1 ? "Converted to lead" : `${created} contacts converted to leads`,
         description:
           skipped > 0
-            ? `${skipped} skipped (already a lead or missing name). Status: ${STATUS_LABELS[status]}.`
-            : `Status: ${STATUS_LABELS[status]}. Open Leads to see them.`,
+            ? `${skipped} skipped (already a lead or missing name). Status: ${getLabel(status)}.`
+            : `Status: ${getLabel(status)}. Open Leads to see them.`,
       });
       onOpenChange(false);
       onConverted?.();
@@ -184,9 +181,9 @@ export function ConvertContactToLeadDialog({ open, onOpenChange, contacts, onCon
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {LEAD_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {STATUS_LABELS[s]}
+              {visibleStatuses.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {getLabel(s.id)}
                 </SelectItem>
               ))}
             </SelectContent>

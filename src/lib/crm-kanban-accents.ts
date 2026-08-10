@@ -2,7 +2,7 @@ import type { LeadStatus } from "@/lib/crm-lead-schema";
 
 /** Visual accents per pipeline stage (Tailwind classes). */
 export const KANBAN_COLUMN_ACCENTS: Record<
-  LeadStatus,
+  string,
   { bar: string; tint: string; dropHighlight: string }
 > = {
   new_lead: {

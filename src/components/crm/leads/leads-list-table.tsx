@@ -3,11 +3,12 @@
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Building2, ChevronRight, Mail } from "lucide-react";
 import type { CrmLead } from "@/contexts/crm-leads-context";
-import { PLATFORM_LABELS, PIPELINE_STATUSES, STATUS_LABELS } from "@/lib/crm-lead-schema";
+import { PLATFORM_LABELS } from "@/lib/crm-lead-schema";
+import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 import { firestoreTimestampToDate } from "@/lib/crm-date-utils";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { LEAD_STATUS_PILL_CLASS, platformPillClass } from "@/lib/crm-lead-badges";
+import { statusPillClass, platformPillClass } from "@/lib/crm-lead-badges";
 
 type Props = {
   leads: CrmLead[];
@@ -18,7 +19,12 @@ type Props = {
 
 type SortKey = "name" | "source" | "status" | "followup";
 
-function sortLeads(list: CrmLead[], key: SortKey, dir: "asc" | "desc"): CrmLead[] {
+function sortLeads(
+  list: CrmLead[],
+  key: SortKey,
+  dir: "asc" | "desc",
+  statusOrder: string[]
+): CrmLead[] {
   const next = [...list];
   const sign = dir === "asc" ? 1 : -1;
   next.sort((a, b) => {
@@ -31,9 +37,11 @@ function sortLeads(list: CrmLead[], key: SortKey, dir: "asc" | "desc"): CrmLead[
       return sign * la.localeCompare(lb, undefined, { sensitivity: "base" });
     }
     if (key === "status") {
-      const ia = PIPELINE_STATUSES.indexOf(a.status);
-      const ib = PIPELINE_STATUSES.indexOf(b.status);
-      return sign * (ia - ib);
+      const ia = statusOrder.indexOf(a.status);
+      const ib = statusOrder.indexOf(b.status);
+      const sa = ia < 0 ? 999 : ia;
+      const sb = ib < 0 ? 999 : ib;
+      return sign * (sa - sb);
     }
     const ta = firestoreTimestampToDate(a.nextFollowUpAt ?? undefined)?.getTime();
     const tb = firestoreTimestampToDate(b.nextFollowUpAt ?? undefined)?.getTime();
@@ -83,10 +91,15 @@ function SortableTh({
 }
 
 export function LeadsListTable({ leads, onOpen, showListChrome = true }: Props) {
+  const { statuses, getLabel, getAccent } = useCrmPipeline();
+  const statusOrder = useMemo(() => statuses.map((s) => s.id), [statuses]);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
-  const sorted = useMemo(() => sortLeads(leads, sortKey, sortDir), [leads, sortKey, sortDir]);
+  const sorted = useMemo(
+    () => sortLeads(leads, sortKey, sortDir, statusOrder),
+    [leads, sortKey, sortDir, statusOrder]
+  );
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -128,7 +141,7 @@ export function LeadsListTable({ leads, onOpen, showListChrome = true }: Props) 
       <div className="flex flex-col gap-3 md:hidden">
         {sorted.map((l) => {
           const next = firestoreTimestampToDate(l.nextFollowUpAt ?? undefined);
-          const statusClass = LEAD_STATUS_PILL_CLASS[l.status];
+          const statusClass = statusPillClass(l.status, getAccent(l.status).pill);
           const srcClass = platformPillClass(l.platformSource);
           return (
             <button
@@ -164,7 +177,7 @@ export function LeadsListTable({ leads, onOpen, showListChrome = true }: Props) 
                     statusClass
                   )}
                 >
-                  {STATUS_LABELS[l.status]}
+                  {getLabel(l.status)}
                 </span>
               </div>
               {l.email ? (
@@ -229,7 +242,7 @@ export function LeadsListTable({ leads, onOpen, showListChrome = true }: Props) 
             <tbody className="[&_tr:last-child]:border-0">
               {sorted.map((l, i) => {
                 const next = firestoreTimestampToDate(l.nextFollowUpAt ?? undefined);
-                const statusClass = LEAD_STATUS_PILL_CLASS[l.status];
+                const statusClass = statusPillClass(l.status, getAccent(l.status).pill);
                 const srcClass = platformPillClass(l.platformSource);
                 return (
                   <tr
@@ -262,7 +275,7 @@ export function LeadsListTable({ leads, onOpen, showListChrome = true }: Props) 
                           statusClass
                         )}
                       >
-                        {STATUS_LABELS[l.status]}
+                        {getLabel(l.status)}
                       </span>
                     </td>
                     <td className="p-4 align-middle text-muted-foreground tabular-nums">

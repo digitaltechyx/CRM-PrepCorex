@@ -4,6 +4,7 @@ import { useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
 import { useCrmLeads } from "@/contexts/crm-leads-context";
+import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 import {
   buildLeadsCreatedSeries,
   buildOutcomeSplit,
@@ -51,6 +52,7 @@ const PIE_SOURCE_COLORS = [
 
 export function CrmDashboardAnalytics() {
   const { leads, loading, error } = useCrmLeads();
+  const { statuses } = useCrmPipeline();
   const [velocityRange, setVelocityRange] = useState<LeadVelocityRange>("14d");
   const velocityGradientId = `fillLeadsDash-${useId().replace(/:/g, "")}`;
 
@@ -58,7 +60,10 @@ export function CrmDashboardAnalytics() {
     () => buildLeadsCreatedSeries(leads, leadVelocityRangeToDays(velocityRange)),
     [leads, velocityRange]
   );
-  const statusRows = useMemo(() => buildStatusCounts(leads), [leads]);
+  const statusRows = useMemo(
+    () => buildStatusCounts(leads, statuses.map((s) => ({ id: s.id, label: s.label }))),
+    [leads, statuses]
+  );
   const { sourceRows, sourceTotal } = useMemo(() => {
     const rows = buildSourceCounts(leads);
     const sorted = [...rows].sort((a, b) => b.count - a.count);

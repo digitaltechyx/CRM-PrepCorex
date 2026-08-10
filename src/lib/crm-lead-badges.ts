@@ -1,4 +1,4 @@
-import type { LeadStatus, PlatformSource } from "@/lib/crm-lead-schema";
+import type { PlatformSource } from "@/lib/crm-lead-schema";
 
 /** Platform pills (Kanban cards + list view). */
 export const PLATFORM_PILL_CLASS: Partial<Record<PlatformSource, string>> = {
@@ -15,7 +15,7 @@ export function platformPillClass(source: PlatformSource): string {
 }
 
 /** Status pills aligned with pipeline column colors (list + compact UI). */
-export const LEAD_STATUS_PILL_CLASS: Record<LeadStatus, string> = {
+export const LEAD_STATUS_PILL_CLASS: Record<string, string> = {
   new_lead: "bg-violet-500/12 text-violet-900 ring-violet-500/25 dark:text-violet-200",
   contacted: "bg-sky-500/12 text-sky-900 ring-sky-500/25 dark:text-sky-200",
   follow_up_1: "bg-amber-500/14 text-amber-950 ring-amber-500/30 dark:text-amber-200",
@@ -26,3 +26,7 @@ export const LEAD_STATUS_PILL_CLASS: Record<LeadStatus, string> = {
   client: "bg-green-500/14 text-green-950 ring-green-500/30 dark:text-green-200",
   dead: "bg-slate-500/12 text-slate-800 ring-slate-500/25 dark:text-slate-300",
 };
+
+export function statusPillClass(status: string, accentPill?: string): string {
+  return accentPill || LEAD_STATUS_PILL_CLASS[status] || "bg-muted/80 text-muted-foreground ring-border";
+}

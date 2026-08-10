@@ -15,25 +15,28 @@ import { useDroppable } from "@dnd-kit/core";
 import { LeadKanbanCard } from "./lead-card";
 import type { CrmLead } from "@/contexts/crm-leads-context";
 import { useCrmLeads } from "@/contexts/crm-leads-context";
+import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 import { useAuth } from "@/hooks/use-auth";
-import { PIPELINE_STATUSES, STATUS_LABELS, type LeadStatus } from "@/lib/crm-lead-schema";
+import type { LeadStatus } from "@/lib/crm-lead-schema";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { KANBAN_COLUMN_ACCENTS } from "@/lib/crm-kanban-accents";
 import { ChevronLeft, ChevronRight, LayoutGrid, Rows3 } from "lucide-react";
 
 function KanbanColumn({
   status,
+  label,
+  accent,
   leads,
   onOpenLead,
 }: {
   status: LeadStatus;
+  label: string;
+  accent: { bar: string; tint: string; dropHighlight: string; pill: string };
   leads: CrmLead[];
   onOpenLead: (l: CrmLead) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
-  const accent = KANBAN_COLUMN_ACCENTS[status];
   const empty = leads.length === 0;
 
   return (
@@ -55,7 +58,7 @@ function KanbanColumn({
         />
         <div className="flex items-start justify-between gap-2">
           <h3 className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
-            {STATUS_LABELS[status]}
+            {label}
           </h3>
           <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-background/90 px-2 text-sm font-bold tabular-nums text-foreground shadow-inner ring-1 ring-border/60">
             {leads.length}
@@ -104,6 +107,8 @@ const SCROLL_EDGE_EPS = 6;
 export function LeadKanban({ leads, onOpenLead }: Props) {
   const { user } = useAuth();
   const { updateLeadStatus } = useCrmLeads();
+  const { visibleStatuses, getLabel, getAccent } = useCrmPipeline();
+  const pipelineIds = visibleStatuses.map((s) => s.id);
   const [active, setActive] = useState<CrmLead | null>(null);
   const boardScrollRef = useRef<HTMLDivElement>(null);
   const [canScrollX, setCanScrollX] = useState(false);
@@ -165,7 +170,7 @@ export function LeadKanban({ leads, onOpenLead }: Props) {
       if (!over || !user?.uid) return;
       const leadId = String(a.id);
       const overId = String(over.id) as LeadStatus;
-      if (!PIPELINE_STATUSES.includes(overId)) return;
+      if (!pipelineIds.includes(overId)) return;
       const lead = leads.find((l) => l.id === leadId);
       if (!lead || lead.status === overId) return;
       try {
@@ -174,7 +179,7 @@ export function LeadKanban({ leads, onOpenLead }: Props) {
         console.error(err);
       }
     },
-    [leads, updateLeadStatus, user?.uid]
+    [leads, updateLeadStatus, user?.uid, pipelineIds]
   );
 
   return (
@@ -247,11 +252,13 @@ export function LeadKanban({ leads, onOpenLead }: Props) {
           )}
         >
           <div className="flex w-max gap-4 pb-2 pr-1 pt-0.5">
-            {PIPELINE_STATUSES.map((status) => (
+            {visibleStatuses.map((s) => (
               <KanbanColumn
-                key={status}
-                status={status}
-                leads={byStatus(status)}
+                key={s.id}
+                status={s.id}
+                label={getLabel(s.id)}
+                accent={getAccent(s.id)}
+                leads={byStatus(s.id)}
                 onOpenLead={onOpenLead}
               />
             ))}

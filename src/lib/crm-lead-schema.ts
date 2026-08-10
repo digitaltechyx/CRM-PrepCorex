@@ -12,9 +12,11 @@ export const LEAD_STATUSES = [
   "dead",
 ] as const;
 
-export type LeadStatus = (typeof LEAD_STATUSES)[number];
+/** System default status ids. Custom pipeline statuses are free-form strings. */
+export type SystemLeadStatus = (typeof LEAD_STATUSES)[number];
+export type LeadStatus = string;
 
-export const STATUS_LABELS: Record<LeadStatus, string> = {
+export const STATUS_LABELS: Record<SystemLeadStatus, string> = {
   new_lead: "New lead",
   contacted: "Contacted",
   follow_up_1: "Follow-up 1",
@@ -26,18 +28,8 @@ export const STATUS_LABELS: Record<LeadStatus, string> = {
   dead: "Not interested / No reply",
 };
 
-/** Kanban column order (left → right). */
-export const PIPELINE_STATUSES: LeadStatus[] = [
-  "new_lead",
-  "contacted",
-  "follow_up_1",
-  "follow_up_2",
-  "qualified",
-  "quote_sent",
-  "negotiation",
-  "client",
-  "dead",
-];
+/** Kanban column order (left → right) for defaults before custom pipeline config loads. */
+export const PIPELINE_STATUSES: LeadStatus[] = [...LEAD_STATUSES];
 
 export const PLATFORM_SOURCES = [
   "linkedin",
@@ -83,7 +75,7 @@ export const BUSINESS_TYPE_LABELS: Record<BusinessType, string> = {
   other: "Other",
 };
 
-/** Days until next follow-up when entering this status (from spec). */
+/** Days until next follow-up when entering this status (from spec). Custom statuses default to 2. */
 export function defaultFollowUpDaysForStatus(status: LeadStatus): number | null {
   if (status === "dead" || status === "client") return null;
   switch (status) {

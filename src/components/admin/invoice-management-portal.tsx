@@ -73,7 +73,7 @@ type ExternalInvoiceStatus =
   | "disputed"
   | "cancelled";
 
-type PaymentMethod = "Zelle" | "ACH" | "Wire" | "Other";
+type PaymentMethod = "Zelle" | "ACH" | "Wire" | "Mercury" | "Other";
 
 type InvoiceEmailLogType =
   | "invoice_sent"
@@ -156,6 +156,11 @@ interface ExternalInvoice {
   lateFee?: number;
   lateFeeEmailSentAt?: any;
   secondOverdueReminderSentAt?: any;
+  mercuryCustomerId?: string;
+  mercuryInvoiceId?: string;
+  mercuryPaymentUrl?: string;
+  mercuryInvoiceStatus?: string;
+  mercurySyncedAt?: any;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -1825,10 +1830,13 @@ Prep Services FBA Team`;
 
   const openEmailDialog = (invoice: ExternalInvoice) => {
     setActiveEmailInvoice(invoice);
+    const defaultMessage = invoice.mercuryPaymentUrl
+      ? `Please find your invoice attached.\n\nPay securely online (ACH, wire, or card):\n${invoice.mercuryPaymentUrl}\n\nThank you,\nPrep Services FBA`
+      : `Please find your invoice attached.\n\nThank you,\nPrep Services FBA`;
     setEmailForm({
       to: invoice.clientEmail || "",
       subject: `Prep Services FBA - Invoice ${invoice.invoiceNumber}`,
-      message: "",
+      message: defaultMessage,
       attachments: [],
     });
     setEmailDialogOpen(true);
@@ -1838,22 +1846,58 @@ Prep Services FBA Team`;
     if (!activeEmailInvoice || !user) return;
     setIsSendingEmail(true);
     try {
+      const idToken = await user.getIdToken();
+      const headers: HeadersInit = {
+        Authorization: `Bearer ${idToken}`,
+      };
+      const vercelBypass = process.env.NEXT_PUBLIC_VERCEL_PROTECTION_BYPASS;
+      if (vercelBypass) {
+        headers["x-vercel-protection-bypass"] = vercelBypass;
+      }
+
+      let mercuryPaymentUrl = activeEmailInvoice.mercuryPaymentUrl || "";
+      try {
+        const mercuryRes = await fetch("/api/mercury/invoices", {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ invoiceId: activeEmailInvoice.id }),
+        });
+        if (mercuryRes.ok) {
+          const mercuryData = (await mercuryRes.json()) as { mercuryPaymentUrl?: string };
+          mercuryPaymentUrl = mercuryData.mercuryPaymentUrl || mercuryPaymentUrl;
+        } else if (mercuryRes.status !== 503) {
+          const text = await mercuryRes.text();
+          throw new Error(text || "Failed to create Mercury payment link.");
+        }
+      } catch (mercuryError) {
+        console.error("Mercury invoice setup failed:", mercuryError);
+        toast({
+          variant: "destructive",
+          title: "Mercury payment link failed",
+          description:
+            mercuryError instanceof Error
+              ? mercuryError.message
+              : "Could not create Mercury payment link. Invoice was not sent.",
+        });
+        return;
+      }
+
+      const paymentBlock = mercuryPaymentUrl
+        ? `\n\nPay securely online (ACH, wire, or card):\n${mercuryPaymentUrl}`
+        : "";
+      const emailMessage =
+        (emailForm.message || "Please find your invoice attached.").trim() + paymentBlock;
+
       const invoiceBlob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(activeEmailInvoice));
       const invoiceFile = new File([invoiceBlob], `Invoice-${activeEmailInvoice.invoiceNumber}.pdf`, {
         type: "application/pdf",
       });
       const attachmentsToSend = [invoiceFile, ...emailForm.attachments];
 
-      const idToken = await user.getIdToken();
-      const headers: HeadersInit = {
-        Authorization: `Bearer ${idToken}`,
-      };
       const externalEmailApi = process.env.NEXT_PUBLIC_EMAIL_API_URL;
-      const vercelBypass = process.env.NEXT_PUBLIC_VERCEL_PROTECTION_BYPASS;
-      if (vercelBypass) {
-        headers["x-vercel-protection-bypass"] = vercelBypass;
-      }
-
       let response: Response;
       if (externalEmailApi) {
         const attachmentsPayload = await Promise.all(
@@ -1873,7 +1917,7 @@ Prep Services FBA Team`;
           body: JSON.stringify({
             to: emailForm.to.trim(),
             subject: emailForm.subject.trim(),
-            message: emailForm.message || "",
+            message: emailMessage,
             attachments: attachmentsPayload,
           }),
         });
@@ -1881,7 +1925,7 @@ Prep Services FBA Team`;
         const payload = new FormData();
         payload.append("to", emailForm.to.trim());
         payload.append("subject", emailForm.subject.trim());
-        payload.append("message", emailForm.message || "");
+        payload.append("message", emailMessage);
         attachmentsToSend.forEach((file) => payload.append("attachments", file));
         const apiUrl = vercelBypass
           ? `/api/email/send?x-vercel-protection-bypass=${encodeURIComponent(vercelBypass)}`
@@ -1901,6 +1945,12 @@ Prep Services FBA Team`;
       await updateDoc(doc(db, "external_invoices", activeEmailInvoice.id), {
         status: "sent",
         sentAt: activeEmailInvoice.sentAt || new Date(),
+        ...(mercuryPaymentUrl
+          ? {
+              mercuryPaymentUrl,
+              mercuryInvoiceStatus: "Unpaid",
+            }
+          : {}),
         updatedAt: serverTimestamp(),
       });
 
@@ -4127,6 +4177,7 @@ Prep Services FBA Team`;
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="Zelle">Zelle</SelectItem>
+                  <SelectItem value="Mercury">Mercury</SelectItem>
                   <SelectItem value="ACH">ACH</SelectItem>
                   <SelectItem value="Wire">Wire</SelectItem>
                   <SelectItem value="Other">Other</SelectItem>

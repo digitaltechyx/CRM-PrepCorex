@@ -124,13 +124,20 @@ async function mercuryRequest<T>(
   }
 
   if (!response.ok) {
-    const message =
-      typeof body === "object" && body && "message" in body
-        ? String((body as { message?: string }).message)
-        : typeof body === "string"
-          ? body
-          : `Mercury API ${response.status}`;
-    throw new Error(message || `Mercury API ${response.status}`);
+    const obj =
+      typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
+    const detail =
+      (typeof obj?.error === "string" && obj.error) ||
+      (typeof obj?.message === "string" && obj.message) ||
+      (typeof body === "string" ? body : "");
+    const label = response.status === 403
+      ? "Mercury AR API access denied — confirm Plus/Pro subscription and token scopes."
+      : response.status === 401
+        ? "Mercury API token rejected — check MERCURY_API_TOKEN."
+        : response.status === 400
+          ? "Mercury rejected the invoice payload."
+          : `Mercury API error (${response.status}).`;
+    throw new Error(detail ? `${label} ${detail}` : label);
   }
 
   return body as T;

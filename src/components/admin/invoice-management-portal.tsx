@@ -18,7 +18,7 @@ import { db } from "@/lib/firebase";
 import { useCollection } from "@/hooks/use-collection";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
+import { readFetchError } from "@/lib/invoice-utils";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
 import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
 import {
@@ -1869,18 +1869,22 @@ Prep Services FBA Team`;
           const mercuryData = (await mercuryRes.json()) as { mercuryPaymentUrl?: string };
           mercuryPaymentUrl = mercuryData.mercuryPaymentUrl || mercuryPaymentUrl;
         } else if (mercuryRes.status !== 503) {
-          const text = await mercuryRes.text();
-          throw new Error(text || "Failed to create Mercury payment link.");
+          const message = await readFetchError(
+            mercuryRes,
+            "Could not create Mercury payment link."
+          );
+          throw new Error(message);
         }
       } catch (mercuryError) {
         console.error("Mercury invoice setup failed:", mercuryError);
+        const message =
+          mercuryError instanceof Error
+            ? mercuryError.message
+            : "Could not create Mercury payment link. Invoice was not sent.";
         toast({
           variant: "destructive",
           title: "Mercury payment link failed",
-          description:
-            mercuryError instanceof Error
-              ? mercuryError.message
-              : "Could not create Mercury payment link. Invoice was not sent.",
+          description: message,
         });
         return;
       }
@@ -1938,8 +1942,11 @@ Prep Services FBA Team`;
       }
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || "Failed to send invoice.");
+        const message = await readFetchError(
+          response,
+          "Email could not be sent. Check SMTP settings on the CRM server."
+        );
+        throw new Error(message);
       }
 
       await updateDoc(doc(db, "external_invoices", activeEmailInvoice.id), {
@@ -1967,7 +1974,15 @@ Prep Services FBA Team`;
       setActiveTab("sent");
     } catch (error) {
       console.error("Failed to send invoice:", error);
-      toast({ variant: "destructive", title: "Failed to send invoice." });
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown error while sending the invoice.";
+      toast({
+        variant: "destructive",
+        title: "Failed to send invoice",
+        description: message,
+      });
     } finally {
       setIsSendingEmail(false);
     }

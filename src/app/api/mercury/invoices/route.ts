@@ -102,9 +102,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, ...mercury });
   } catch (error) {
     console.error("Mercury invoice create error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to create Mercury invoice." },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : "Failed to create Mercury invoice.";
+    return NextResponse.json({ error: message, step: "mercury_create_invoice" }, { status: 500 });
   }
 }

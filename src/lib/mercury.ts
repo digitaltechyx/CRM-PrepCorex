@@ -49,8 +49,22 @@ export function normalizeMercuryApiToken(raw: string): string {
   let token = String(raw || "").trim();
   if (!token) return "";
 
+  // Vercel paste issues: wrapped quotes or trailing newlines
+  if (
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'"))
+  ) {
+    token = token.slice(1, -1).trim();
+  }
+  token = token.replace(/[\r\n]+/g, "");
+
   if (token.toLowerCase().startsWith("bearer ")) {
     token = token.slice(7).trim();
+  }
+
+  // Avoid double prefix if user pasted secret-token:secret-token:...
+  while (token.startsWith("secret-token:secret-token:")) {
+    token = token.replace(/^secret-token:/, "");
   }
 
   if (token.startsWith("mercury_") && !token.startsWith("secret-token:")) {
@@ -113,6 +127,42 @@ export function verifyMercuryWebhookSignature(
   }
 }
 
+function formatMercuryApiError(status: number, body: unknown): string {
+  const obj = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
+  const nested =
+    obj?.errors && typeof obj.errors === "object" && obj.errors !== null
+      ? (obj.errors as Record<string, unknown>)
+      : null;
+
+  const errorCode =
+    (typeof nested?.errorCode === "string" && nested.errorCode) ||
+    (typeof obj?.errorCode === "string" && obj.errorCode) ||
+    "";
+  const detail =
+    (typeof nested?.message === "string" && nested.message) ||
+    (typeof obj?.error === "string" && obj.error) ||
+    (typeof obj?.message === "string" && obj.message) ||
+    (typeof body === "string" ? body : "");
+
+  if (errorCode === "ipNotWhitelisted") {
+    return (
+      "Mercury API token is IP-restricted. CRM runs on Vercel with changing server IPs — " +
+      "edit the token in Mercury → Settings → API tokens and remove the IP whitelist (or disable IP restriction)."
+    );
+  }
+
+  const label =
+    status === 403
+      ? "Mercury AR API access denied — confirm Plus/Pro subscription and token scopes."
+      : status === 401
+        ? "Mercury API token rejected — check MERCURY_API_TOKEN on Vercel and redeploy."
+        : status === 400
+          ? "Mercury rejected the invoice payload."
+          : `Mercury API error (${status}).`;
+
+  return detail ? `${label} ${detail}` : label;
+}
+
 async function mercuryRequest<T>(
   config: MercuryConfig,
   path: string,
@@ -139,20 +189,7 @@ async function mercuryRequest<T>(
   }
 
   if (!response.ok) {
-    const obj =
-      typeof body === "object" && body !== null ? (body as Record<string, unknown>) : null;
-    const detail =
-      (typeof obj?.error === "string" && obj.error) ||
-      (typeof obj?.message === "string" && obj.message) ||
-      (typeof body === "string" ? body : "");
-    const label = response.status === 403
-      ? "Mercury AR API access denied — confirm Plus/Pro subscription and token scopes."
-      : response.status === 401
-        ? "Mercury API token rejected — check MERCURY_API_TOKEN (use the full token from Mercury, with or without secret-token: prefix)."
-        : response.status === 400
-          ? "Mercury rejected the invoice payload."
-          : `Mercury API error (${response.status}).`;
-    throw new Error(detail ? `${label} ${detail}` : label);
+    throw new Error(formatMercuryApiError(response.status, body));
   }
 
   return body as T;

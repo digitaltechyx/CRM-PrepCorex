@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb, adminFieldValue } from "@/lib/firebase-admin";
 import { syncOpenMercuryInvoices } from "@/lib/mercury-invoice-sync";
-import { readMercuryConfigFromEnv, verifyMercuryWebhookSignature } from "@/lib/mercury";
+import { verifyMercuryWebhookSignature } from "@/lib/mercury";
+import { isMercuryConfiguredLocally } from "@/lib/mercury-proxy-client";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export async function HEAD() {
 }
 
 export async function POST(request: NextRequest) {
-  const config = readMercuryConfigFromEnv();
+  const webhookSecret = String(process.env.MERCURY_WEBHOOK_SECRET || "").trim();
   const rawBody = await request.text();
   const signature = request.headers.get("Mercury-Signature");
 
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest) {
     return reachabilityResponse();
   }
 
-  if (!config?.webhookSecret) {
+  if (!webhookSecret) {
     return NextResponse.json(
       {
         error:
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!verifyMercuryWebhookSignature(rawBody, signature, config.webhookSecret)) {
+  if (!verifyMercuryWebhookSignature(rawBody, signature, webhookSecret)) {
     return NextResponse.json(
       {
         error:
@@ -70,8 +71,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const resourceType = String(event.resourceType || "");
-    if (resourceType === "transaction" && config) {
-      const result = await syncOpenMercuryInvoices(adminDb(), adminFieldValue(), config);
+    if (resourceType === "transaction") {
+      if (!isMercuryConfiguredLocally()) {
+        return NextResponse.json({ error: "Mercury is not configured." }, { status: 503 });
+      }
+      const result = await syncOpenMercuryInvoices(adminDb(), adminFieldValue());
       return NextResponse.json({ success: true, eventId: event.id, ...result });
     }
 

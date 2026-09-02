@@ -1,13 +1,17 @@
 import crypto from "crypto";
 import type { Firestore } from "firebase-admin/firestore";
 import {
+  getMercuryInvoiceViaProxy,
+  readMercuryProxyFromEnv,
+} from "@/lib/mercury-proxy-client";
+import {
   buildMercuryPayUrl,
   createMercuryInvoice,
   findOrCreateMercuryCustomer,
   getMercuryInvoice,
   readMercuryConfigFromEnv,
-  type MercuryConfig,
   type MercuryLineItem,
+  type MercuryInvoice,
 } from "@/lib/mercury";
 
 export type CrmInvoiceForMercury = {
@@ -148,10 +152,21 @@ export async function ensureMercuryInvoiceForCrmInvoice(
   };
 }
 
+async function fetchMercuryInvoiceById(mercuryInvoiceId: string): Promise<MercuryInvoice> {
+  const proxy = readMercuryProxyFromEnv();
+  if (proxy) {
+    return getMercuryInvoiceViaProxy(proxy, mercuryInvoiceId);
+  }
+  const config = readMercuryConfigFromEnv();
+  if (!config) {
+    throw new Error("Mercury is not configured.");
+  }
+  return getMercuryInvoice(config, mercuryInvoiceId);
+}
+
 export async function syncOpenMercuryInvoices(
   db: Firestore,
-  fieldValue: FirebaseFirestore.FieldValue,
-  config: MercuryConfig
+  fieldValue: FirebaseFirestore.FieldValue
 ): Promise<{ checked: number; updated: number }> {
   const snap = await db
     .collection("external_invoices")
@@ -171,7 +186,7 @@ export async function syncOpenMercuryInvoices(
     if (!mercuryInvoiceId) continue;
 
     checked += 1;
-    const mercuryInvoice = await getMercuryInvoice(config, mercuryInvoiceId);
+    const mercuryInvoice = await fetchMercuryInvoiceById(mercuryInvoiceId);
     if (mercuryInvoice.status !== "Paid") continue;
 
     const invoiceTotal = getInvoiceTotal(data as CrmInvoiceForMercury);

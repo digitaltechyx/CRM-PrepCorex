@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import {
+  ensureMercuryInvoiceViaProxy,
+  isMercuryConfiguredLocally,
+  readMercuryProxyFromEnv,
+} from "@/lib/mercury-proxy-client";
 import { ensureMercuryInvoiceForCrmInvoice } from "@/lib/mercury-invoice-sync";
-import { readMercuryConfigFromEnv } from "@/lib/mercury";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +67,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
-  if (!readMercuryConfigFromEnv()) {
+  if (!isMercuryConfiguredLocally()) {
     return NextResponse.json({ error: "Mercury is not configured." }, { status: 503 });
   }
 
@@ -90,7 +94,10 @@ export async function POST(request: NextRequest) {
       typeof ensureMercuryInvoiceForCrmInvoice
     >[0];
 
-    const mercury = await ensureMercuryInvoiceForCrmInvoice(invoice);
+    const proxy = readMercuryProxyFromEnv();
+    const mercury = proxy
+      ? await ensureMercuryInvoiceViaProxy(proxy, invoice)
+      : await ensureMercuryInvoiceForCrmInvoice(invoice);
     await ref.update({
       mercuryCustomerId: mercury.mercuryCustomerId,
       mercuryInvoiceId: mercury.mercuryInvoiceId,

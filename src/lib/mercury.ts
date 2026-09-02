@@ -45,8 +45,23 @@ export type MercuryWebhookEvent = {
   previousValues?: Record<string, unknown>;
 };
 
+export function normalizeMercuryApiToken(raw: string): string {
+  let token = String(raw || "").trim();
+  if (!token) return "";
+
+  if (token.toLowerCase().startsWith("bearer ")) {
+    token = token.slice(7).trim();
+  }
+
+  if (token.startsWith("mercury_") && !token.startsWith("secret-token:")) {
+    token = `secret-token:${token}`;
+  }
+
+  return token;
+}
+
 export function readMercuryConfigFromEnv(): MercuryConfig | null {
-  const apiToken = String(process.env.MERCURY_API_TOKEN || "").trim();
+  const apiToken = normalizeMercuryApiToken(process.env.MERCURY_API_TOKEN || "");
   const destinationAccountId = String(process.env.MERCURY_DESTINATION_ACCOUNT_ID || "").trim();
   const webhookSecret = String(process.env.MERCURY_WEBHOOK_SECRET || "").trim();
   if (!apiToken || !destinationAccountId) return null;
@@ -133,7 +148,7 @@ async function mercuryRequest<T>(
     const label = response.status === 403
       ? "Mercury AR API access denied — confirm Plus/Pro subscription and token scopes."
       : response.status === 401
-        ? "Mercury API token rejected — check MERCURY_API_TOKEN."
+        ? "Mercury API token rejected — check MERCURY_API_TOKEN (use the full token from Mercury, with or without secret-token: prefix)."
         : response.status === 400
           ? "Mercury rejected the invoice payload."
           : `Mercury API error (${response.status}).`;

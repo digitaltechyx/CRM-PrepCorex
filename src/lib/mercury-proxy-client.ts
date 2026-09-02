@@ -30,6 +30,22 @@ async function readProxyError(response: Response, fallback: string): Promise<str
   return text || `${fallback} (HTTP ${response.status})`;
 }
 
+async function mercuryProxyFetch(
+  proxy: MercuryProxyConfig,
+  init: RequestInit
+): Promise<Response> {
+  const url = `${proxy.baseUrl}/api/mercury/proxy/invoices`;
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "network error";
+    throw new Error(
+      `Cannot reach Mercury proxy at ${proxy.baseUrl} (${detail}). ` +
+        "Check MERCURY_PROXY_URL on Vercel (use https:// on port 443, not :3001), redeploy after env changes, and ensure Hostinger Traefik routes mercury-api."
+    );
+  }
+}
+
 export async function ensureMercuryInvoiceViaProxy(
   proxy: MercuryProxyConfig,
   invoice: CrmInvoiceForMercury
@@ -39,7 +55,7 @@ export async function ensureMercuryInvoiceViaProxy(
   mercuryPaymentUrl: string;
   mercuryInvoiceStatus: string;
 }> {
-  const response = await fetch(`${proxy.baseUrl}/api/mercury/proxy/invoices`, {
+  const response = await mercuryProxyFetch(proxy, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -59,7 +75,7 @@ export async function getMercuryInvoiceViaProxy(
   proxy: MercuryProxyConfig,
   mercuryInvoiceId: string
 ): Promise<MercuryInvoice> {
-  const response = await fetch(`${proxy.baseUrl}/api/mercury/proxy/invoices`, {
+  const response = await mercuryProxyFetch(proxy, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

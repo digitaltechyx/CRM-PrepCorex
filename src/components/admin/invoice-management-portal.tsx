@@ -23,6 +23,10 @@ import { cn } from "@/lib/utils";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
 import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
 import {
+  buildInvoiceSavingsPdfFile,
+  buildInvoiceSavingsReportData,
+} from "@/lib/invoice-savings-report-generator";
+import {
   type CrmAddressContact,
   contactMatchesQuery,
   contactSuggestionLabel,
@@ -55,6 +59,7 @@ import {
   Loader2,
   Mail,
   Percent,
+  PiggyBank,
   Plus,
   Receipt,
   RotateCcw,
@@ -100,6 +105,8 @@ interface ExternalInvoiceItem {
   description: string;
   quantity: number;
   unitPrice: number;
+  /** Typical market / list unit price for value comparison (optional). */
+  compareUnitPrice?: number;
   amount: number;
 }
 
@@ -189,8 +196,18 @@ const createEmptyItem = (): ExternalInvoiceItem => ({
   description: "",
   quantity: 1,
   unitPrice: 0,
+  compareUnitPrice: 0,
   amount: 0,
 });
+
+const triggerBlobDownload = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+};
 
 const createInvoiceNumber = () => {
   const today = new Date();
@@ -482,6 +499,17 @@ export function InvoiceManagementPortal() {
     invoiceContactOptions.forEach((item) => map.set(item.label, item.contact));
     return map;
   }, [invoiceContactOptions]);
+
+  const formSavingsPreview = useMemo(
+    () =>
+      buildInvoiceSavingsReportData({
+        invoiceNumber: formData.invoiceNumber || "DRAFT",
+        invoiceDate: formData.invoiceDate || "",
+        clientName: formData.clientName,
+        items: formData.items || [],
+      }),
+    [formData.invoiceNumber, formData.invoiceDate, formData.clientName, formData.items]
+  );
 
   const recalculateTotals = (
     items: ExternalInvoiceItem[],
@@ -995,6 +1023,13 @@ export function InvoiceManagementPortal() {
       const invoiceFile = new File([invoiceBlob], `Invoice-${invoice.invoiceNumber}.pdf`, {
         type: "application/pdf",
       });
+      const savingsFile = await buildInvoiceSavingsPdfFile({
+        invoiceNumber: invoice.invoiceNumber,
+        invoiceDate: invoice.invoiceDate,
+        clientName: invoice.clientName,
+        items: invoice.items || [],
+      });
+      const overdueAttachments = savingsFile ? [invoiceFile, savingsFile] : [invoiceFile];
 
       const idToken = await user.getIdToken();
       const headers: HeadersInit = {
@@ -1022,7 +1057,7 @@ Prep Services FBA Team`;
       let response: Response;
       if (externalEmailApi) {
         const attachmentsPayload = await Promise.all(
-          [invoiceFile].map(async (file) => ({
+          overdueAttachments.map(async (file) => ({
             name: file.name,
             type: file.type,
             size: file.size,
@@ -1048,6 +1083,7 @@ Prep Services FBA Team`;
         payload.append("subject", `Late Fee Added - Invoice ${invoice.invoiceNumber}`);
         payload.append("message", lateFeeMessage);
         payload.append("attachments", invoiceFile);
+        if (savingsFile) payload.append("attachments", savingsFile);
         const apiUrl = vercelBypass
           ? `/api/email/send?x-vercel-protection-bypass=${encodeURIComponent(vercelBypass)}`
           : "/api/email/send";
@@ -1059,16 +1095,14 @@ Prep Services FBA Team`;
       }
 
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || "Failed to send overdue email.");
+        const errText = await response.text();
+        throw new Error(errText || `Email API returned ${response.status}`);
       }
 
-      // Mark email as sent
       await updateDoc(doc(db, "external_invoices", invoice.id), {
         lateFeeEmailSentAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-
       await logInvoiceEmail({
         to: invoice.clientEmail.trim(),
         subject: `Late Fee Added - Invoice ${invoice.invoiceNumber}`,
@@ -1076,11 +1110,11 @@ Prep Services FBA Team`;
         invoiceNumber: invoice.invoiceNumber,
         clientName: invoice.clientName,
       });
-      console.log(`Overdue email sent for invoice ${invoice.invoiceNumber}`);
+      console.log(`Overdue / late fee email sent for invoice ${invoice.invoiceNumber}`);
     } catch (error) {
       console.error(`Failed to send overdue email for invoice ${invoice.invoiceNumber}:`, error);
     }
-  }, [user, toBase64, buildInvoicePdfData, logInvoiceEmail]);
+  }, [user, logInvoiceEmail]);
 
   const sendSecondOverdueReminder = useCallback(async (invoice: ExternalInvoice) => {
     if (!user || !invoice.clientEmail) {
@@ -1359,6 +1393,13 @@ Prep Services FBA Team`;
 
     const invoiceBlob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(invoice));
     const invoiceFile = new File([invoiceBlob], `Invoice-${invoice.invoiceNumber}.pdf`, { type: "application/pdf" });
+    const savingsFile = await buildInvoiceSavingsPdfFile({
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: invoice.invoiceDate,
+      clientName: invoice.clientName,
+      items: invoice.items || [],
+    });
+    const updateAttachments = savingsFile ? [invoiceFile, savingsFile] : [invoiceFile];
     const idToken = await user.getIdToken();
     const headers: HeadersInit = { Authorization: `Bearer ${idToken}` };
     const vercelBypass = process.env.NEXT_PUBLIC_VERCEL_PROTECTION_BYPASS;
@@ -1378,7 +1419,7 @@ Prep Services FBA Team`;
 
     if (externalEmailApi) {
       const attachmentsPayload = await Promise.all(
-        [invoiceFile].map(async (file) => ({
+        updateAttachments.map(async (file) => ({
           name: file.name,
           type: file.type,
           size: file.size,
@@ -1404,7 +1445,7 @@ Prep Services FBA Team`;
       payload.append("to", invoice.clientEmail.trim());
       payload.append("subject", subject);
       payload.append("message", message);
-      payload.append("attachments", invoiceFile);
+      updateAttachments.forEach((file) => payload.append("attachments", file));
       const apiUrl = vercelBypass
         ? `/api/email/send?x-vercel-protection-bypass=${encodeURIComponent(vercelBypass)}`
         : "/api/email/send";
@@ -1560,12 +1601,22 @@ Prep Services FBA Team`;
   const downloadInvoicePdf = async (invoice: ExternalInvoice) => {
     try {
       const blob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(invoice));
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `Invoice-${invoice.invoiceNumber}.pdf`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      triggerBlobDownload(blob, `Invoice-${invoice.invoiceNumber}.pdf`);
+
+      const savingsFile = await buildInvoiceSavingsPdfFile({
+        invoiceNumber: invoice.invoiceNumber,
+        invoiceDate: invoice.invoiceDate,
+        clientName: invoice.clientName,
+        items: invoice.items || [],
+      });
+      if (savingsFile) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        triggerBlobDownload(savingsFile, savingsFile.name);
+        toast({
+          title: "Invoice + value report downloaded",
+          description: "Clients see list vs charged pricing and estimated savings.",
+        });
+      }
     } catch (error) {
       console.error("Failed to download invoice PDF:", error);
       toast({ variant: "destructive", title: "Failed to download invoice PDF." });
@@ -1729,11 +1780,12 @@ Prep Services FBA Team`;
   };
 
   const handleEditInvoice = (invoice: ExternalInvoice) => {
-    const normalizedItems = (invoice.items || []).map((it: ExternalInvoiceItem, i: number) => ({
+    const normalizedItems = (invoice.items || []).map((it: ExternalInvoiceItem) => ({
       id: it.id || crypto.randomUUID(),
       description: String(it.description ?? ""),
       quantity: Number(it.quantity ?? 0),
       unitPrice: Number(it.unitPrice ?? 0),
+      compareUnitPrice: Number(it.compareUnitPrice ?? 0),
       amount: Number(it.amount ?? 0),
     }));
     setFormData({
@@ -1900,7 +1952,15 @@ Prep Services FBA Team`;
       const invoiceFile = new File([invoiceBlob], `Invoice-${activeEmailInvoice.invoiceNumber}.pdf`, {
         type: "application/pdf",
       });
-      const attachmentsToSend = [invoiceFile, ...emailForm.attachments];
+      const savingsFile = await buildInvoiceSavingsPdfFile({
+        invoiceNumber: activeEmailInvoice.invoiceNumber,
+        invoiceDate: activeEmailInvoice.invoiceDate,
+        clientName: activeEmailInvoice.clientName,
+        items: activeEmailInvoice.items || [],
+      });
+      const attachmentsToSend = savingsFile
+        ? [invoiceFile, savingsFile, ...emailForm.attachments]
+        : [invoiceFile, ...emailForm.attachments];
 
       const externalEmailApi = process.env.NEXT_PUBLIC_EMAIL_API_URL;
       let response: Response;
@@ -3148,23 +3208,34 @@ Prep Services FBA Team`;
                 <div className="space-y-3">
                   {/* Desktop header - hidden on mobile where each row has its own labels */}
                   <div className="hidden md:grid grid-cols-12 gap-2 items-center border-b border-amber-200/70 pb-2">
-                    <div className="col-span-6 pr-2">
+                    <div className="col-span-4 pr-2">
                       <h3 className="font-semibold text-amber-800">Item Description</h3>
                     </div>
-                    <div className="col-span-2 text-center">
+                    <div className="col-span-1 text-center">
                       <span className="text-sm font-semibold text-amber-800">Qty</span>
                     </div>
                     <div className="col-span-2 text-right">
-                      <span className="text-sm font-semibold text-amber-800">Unit Price</span>
+                      <span className="text-sm font-semibold text-amber-800">Est. Market Price</span>
                     </div>
-                    <div className="col-span-1 text-right">
+                    <div className="col-span-2 text-right">
+                      <span className="text-sm font-semibold text-amber-800">Your price</span>
+                    </div>
+                    <div className="col-span-2 text-right">
                       <span className="text-sm font-semibold text-amber-800">Amount</span>
                     </div>
                     <div className="col-span-1" />
                   </div>
-                  {formData.items.map((item, index) => (
+                  {formData.items.map((item) => {
+                    const compare = Number(item.compareUnitPrice || 0);
+                    const unit = Number(item.unitPrice || 0);
+                    const qty = Number(item.quantity || 0);
+                    const lineSaved =
+                      compare > unit && compare > 0
+                        ? Number(((compare - unit) * qty).toFixed(2))
+                        : 0;
+                    return (
                     <div key={item.id} className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-2 items-center border-b border-amber-100/50 pb-3 md:pb-2 invoice-actions">
-                      <div className="md:col-span-6 space-y-1 min-w-0 pr-2 md:pr-3">
+                      <div className="md:col-span-4 space-y-1 min-w-0 pr-2 md:pr-3">
                         <label className="text-xs font-medium text-amber-800 md:hidden">Item Description</label>
                         {isPrintMode ? (
                           <p className="text-sm whitespace-pre-wrap break-words">{item.description || "—"}</p>
@@ -3178,7 +3249,7 @@ Prep Services FBA Team`;
                           />
                         )}
                       </div>
-                      <div className="md:col-span-2 space-y-1">
+                      <div className="md:col-span-1 space-y-1">
                         <label className="text-xs font-medium text-amber-800 md:hidden">Qty</label>
                         {isPrintMode ? (
                           <p className="text-sm text-center">{Number(item.quantity ?? 0)}</p>
@@ -3194,7 +3265,26 @@ Prep Services FBA Team`;
                         )}
                       </div>
                       <div className="md:col-span-2 space-y-1">
-                        <label className="text-xs font-medium text-amber-800 md:hidden">Unit Price ($)</label>
+                        <label className="text-xs font-medium text-amber-800 md:hidden">Est. Market Price ($)</label>
+                        {isPrintMode ? (
+                          <p className="text-sm text-right text-muted-foreground">
+                            ${Number(item.compareUnitPrice ?? 0).toFixed(2)}
+                          </p>
+                        ) : (
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={item.compareUnitPrice != null ? String(item.compareUnitPrice) : ""}
+                            onChange={(event) => updateItem(item.id, "compareUnitPrice", event.target.value)}
+                            className="h-9 text-right border-amber-200/70 w-full"
+                            placeholder="Est. market $"
+                            title="Estimated market unit price for the value report"
+                          />
+                        )}
+                      </div>
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="text-xs font-medium text-amber-800 md:hidden">Your price ($)</label>
                         {isPrintMode ? (
                           <p className="text-sm text-right">${Number(item.unitPrice ?? 0).toFixed(2)}</p>
                         ) : (
@@ -3208,8 +3298,13 @@ Prep Services FBA Team`;
                             placeholder="0.00"
                           />
                         )}
+                        {lineSaved > 0 ? (
+                          <p className="text-[11px] text-emerald-700 text-right font-medium">
+                            Saves ${lineSaved.toFixed(2)}
+                          </p>
+                        ) : null}
                       </div>
-                      <div className="md:col-span-1 flex items-center justify-between md:justify-end gap-2">
+                      <div className="md:col-span-2 flex items-center justify-between md:justify-end gap-2">
                         <label className="text-xs font-medium text-amber-800 md:hidden">Amount</label>
                         <p className="text-sm text-right font-semibold">${Number(item.amount ?? 0).toFixed(2)}</p>
                       </div>
@@ -3224,13 +3319,48 @@ Prep Services FBA Team`;
                         </Button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                   <div className="invoice-actions pt-2">
                     <Button variant="outline" size="sm" onClick={addItem}>
                       <Plus className="h-4 w-4 mr-1" />
                       Add Item
                     </Button>
                   </div>
+                  {formSavingsPreview && formSavingsPreview.totalSaved > 0 ? (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <p className="inline-flex items-center gap-1.5 font-semibold text-emerald-900">
+                            <PiggyBank className="h-4 w-4" />
+                            Value report preview
+                          </p>
+                          <p className="text-emerald-800/80 text-xs max-w-xl">
+                            Download PDF includes a PrepCorex-style value report with charts and
+                            line detail so the client sees why this invoice is a fair price.
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-bold tabular-nums text-emerald-800">
+                            ${formSavingsPreview.totalSaved.toFixed(2)}
+                          </p>
+                          <p className="text-xs text-emerald-700">
+                            ~{formSavingsPreview.savingsPercent}% below typical market
+                          </p>
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            Paid ${formSavingsPreview.paidSubtotal.toFixed(2)} · Market $
+                            {formSavingsPreview.marketSubtotal.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : !isPrintMode ? (
+                    <p className="text-xs text-muted-foreground">
+                      Tip: enter an <span className="font-medium">Est. Market Price</span>{" "}
+                      above your charged price on each line to auto-attach a graphical value
+                      report on download and email.
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="flex justify-end">
@@ -3333,7 +3463,9 @@ Prep Services FBA Team`;
                   onClick={() => downloadInvoicePdf({ ...formData, id: "preview" })}
                 >
                   <Download className="h-4 w-4 mr-1" />
-                  Download PDF
+                  {formSavingsPreview?.totalSaved
+                    ? "Download PDF + value report"
+                    : "Download PDF"}
                 </Button>
                 <Button variant="outline" onClick={resetForm}>
                   Reset

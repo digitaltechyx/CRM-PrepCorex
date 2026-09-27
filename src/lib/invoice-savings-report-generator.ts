@@ -126,20 +126,31 @@ export async function generateInvoiceSavingsReportPdfBlob(
   };
 
   const logo = await loadLogo(quotationInvoiceLogoSrc);
-  if (logo) {
-    doc.addImage(logo, logoFormatForPdf(quotationInvoiceLogoSrc), margin, y, 26, 16);
+  let logoHeight = 0;
+  if (logo && logo.naturalWidth > 0 && logo.naturalHeight > 0) {
+    const maxW = 46;
+    const maxH = 14;
+    const ratio = logo.naturalWidth / logo.naturalHeight;
+    let logoW = maxW;
+    let logoH = logoW / ratio;
+    if (logoH > maxH) {
+      logoH = maxH;
+      logoW = logoH * ratio;
+    }
+    doc.addImage(logo, logoFormatForPdf(quotationInvoiceLogoSrc), margin, y, logoW, logoH);
+    logoHeight = logoH;
   }
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
+  doc.setFontSize(14);
   doc.setTextColor(28, 25, 23);
-  doc.text("YOUR VALUE REPORT", pageWidth - margin, y + 5, { align: "right" });
+  doc.text("PSF Value Summary", pageWidth - margin, y + 5, { align: "right" });
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(100, 90, 80);
   doc.text(`Invoice #${data.invoiceNumber}`, pageWidth - margin, y + 11, { align: "right" });
   doc.text(`Date: ${data.invoiceDate}`, pageWidth - margin, y + 16, { align: "right" });
-  y += 24;
+  y += Math.max(logoHeight + 6, 24);
 
   if (data.clientName) {
     doc.setFontSize(10);
@@ -149,41 +160,46 @@ export async function generateInvoiceSavingsReportPdfBlob(
   }
 
   // Hero card — PrepCorex-style value summary
-  ensureSpace(42);
+  ensureSpace(48);
+  const heroY = y;
+  const heroH = 44;
   doc.setFillColor(7, 26, 61);
-  doc.roundedRect(margin, y, contentWidth, 38, 3, 3, "F");
+  doc.roundedRect(margin, heroY, contentWidth, heroH, 3, 3, "F");
 
   doc.setTextColor(253, 186, 116);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
-  doc.text("YOUR ESTIMATED VALUE", margin + 6, y + 8);
+  doc.text("PSF VALUE SUMMARY", margin + 6, heroY + 8);
 
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(10);
+  doc.setFontSize(8.5);
   doc.setFont("helvetica", "normal");
-  doc.text("What you save vs typical market / list pricing on this invoice", margin + 6, y + 14);
+  const heroSub = doc.splitTextToSize(
+    "Your estimated savings compared with typical market pricing for this invoice",
+    contentWidth - 48
+  ) as string[];
+  doc.text(heroSub, margin + 6, heroY + 14);
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(22);
-  doc.text(money(data.totalSaved), margin + 6, y + 26);
+  doc.text(money(data.totalSaved), margin + 6, heroY + 30);
 
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
+  doc.setFontSize(8);
   doc.setTextColor(110, 231, 183);
-  doc.text(
+  const savingsLine =
     data.marketSubtotal > 0
-      ? `About ${data.savingsPercent}% below typical market totals`
-      : "Add compare/list prices on line items to show savings",
-    margin + 6,
-    y + 33
-  );
+      ? `Estimated ${data.savingsPercent}% savings compared with Estimated market pricing.`
+      : "Add Est. Market Price on line items to show savings";
+  const savingsWrapped = doc.splitTextToSize(savingsLine, contentWidth - 48) as string[];
+  doc.text(savingsWrapped, margin + 6, heroY + 36);
 
-  // % ring
+  // % ring (true circle — equal radius in mm)
   const cx = pageWidth - margin - 18;
-  const cy = y + 19;
+  const cy = heroY + heroH / 2;
   doc.setDrawColor(249, 115, 22);
   doc.setLineWidth(2.2);
-  doc.circle(cx, cy, 12, "S");
+  doc.circle(cx, cy, 11, "S");
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
@@ -193,12 +209,12 @@ export async function generateInvoiceSavingsReportPdfBlob(
   doc.setTextColor(203, 213, 225);
   doc.text("SAVED", cx, cy + 5.5, { align: "center" });
 
-  y += 44;
+  y = heroY + heroH + 6;
 
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
   doc.text(
-    `You pay with Prep Services FBA  ${money(data.paidSubtotal)}   ·   Typical market  ${money(data.marketSubtotal)}`,
+    `Your PSF total: ${money(data.paidSubtotal)} · Estimated market total: ${money(data.marketSubtotal)}`,
     margin,
     y
   );
@@ -209,29 +225,30 @@ export async function generateInvoiceSavingsReportPdfBlob(
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(28, 25, 23);
-  doc.text("Paid vs typical market", margin, y);
+  doc.text("PSF vs Estimated Market Pricing", margin, y);
   y += 6;
 
   const maxBar = Math.max(data.paidSubtotal, data.marketSubtotal, 1);
-  const barMaxWidth = contentWidth - 52;
+  const labelColWidth = 48;
+  const barMaxWidth = contentWidth - labelColWidth - 18;
 
   const drawBar = (label: string, value: number, rgb: [number, number, number]) => {
     ensureSpace(14);
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(8);
+    doc.setFontSize(7.5);
     doc.setTextColor(55, 45, 35);
     doc.text(label, margin, y + 3.5);
     const w = Math.max(4, (value / maxBar) * barMaxWidth);
     doc.setFillColor(...rgb);
-    doc.roundedRect(margin + 42, y, w, 6, 1, 1, "F");
+    doc.roundedRect(margin + labelColWidth, y, w, 6, 1, 1, "F");
     doc.setFont("helvetica", "bold");
-    doc.text(money(value), margin + 44 + w, y + 4.5);
+    doc.text(money(value), margin + labelColWidth + 2 + w, y + 4.5);
     y += 11;
   };
 
-  drawBar("You paid", data.paidSubtotal, [249, 115, 22]);
-  drawBar("Typical market", data.marketSubtotal, [100, 116, 139]);
-  drawBar("You save", data.totalSaved, [16, 185, 129]);
+  drawBar("PSF Total", data.paidSubtotal, [249, 115, 22]);
+  drawBar("Estimated Market Total", data.marketSubtotal, [100, 116, 139]);
+  drawBar("Estimated Saving", data.totalSaved, [16, 185, 129]);
   y += 4;
 
   // Line detail
@@ -239,13 +256,13 @@ export async function generateInvoiceSavingsReportPdfBlob(
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(28, 25, 23);
-  doc.text("Line-by-line detail", margin, y);
+  doc.text("Service Price Comparison", margin, y);
   y += 3;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(100, 90, 80);
   doc.text(
-    "Compare each charged unit price against the estimated market price so the savings are clear.",
+    "See how each invoiced service compares with estimated market pricing.",
     margin,
     y + 4
   );
@@ -307,14 +324,14 @@ export async function generateInvoiceSavingsReportPdfBlob(
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
   doc.setTextColor(6, 95, 70);
-  doc.text("Total you save on this invoice", margin + 5, y + 9);
+  doc.text("Estimated savings on this invoice", margin + 5, y + 9);
   doc.setFontSize(14);
   doc.text(money(data.totalSaved), pageWidth - margin - 5, y + 10, { align: "right" });
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(4, 120, 87);
   doc.text(
-    `Paid ${money(data.paidSubtotal)} instead of typical market ${money(data.marketSubtotal)}`,
+    `Your PSF Total: ${money(data.paidSubtotal)} · Estimated Market Total: ${money(data.marketSubtotal)}`,
     margin + 5,
     y + 17
   );
@@ -325,7 +342,7 @@ export async function generateInvoiceSavingsReportPdfBlob(
   doc.setFontSize(7.5);
   doc.setTextColor(120, 113, 108);
   const disclaimer = doc.splitTextToSize(
-    "Est. Market Price values are comparison estimates entered for this invoice so you can see the value of Prep Services FBA pricing. Your invoice total is the amount due. Questions? Contact info@prepservicesfba.com.",
+    "Market prices are estimates for comparison. Your invoice total is the amount due. Questions? Contact info@prepservicesfba.com.",
     contentWidth
   );
   doc.text(disclaimer, margin, y);
@@ -342,7 +359,7 @@ export async function buildInvoiceSavingsPdfFile(input: {
   const data = buildInvoiceSavingsReportData(input);
   if (!data) return null;
   const blob = await generateInvoiceSavingsReportPdfBlob(data);
-  return new File([blob], `Value-Report-${input.invoiceNumber}.pdf`, {
+  return new File([blob], `PSF-Value-Summary-${input.invoiceNumber}.pdf`, {
     type: "application/pdf",
   });
 }

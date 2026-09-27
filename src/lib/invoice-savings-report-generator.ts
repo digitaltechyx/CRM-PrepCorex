@@ -159,10 +159,21 @@ export async function generateInvoiceSavingsReportPdfBlob(
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 14;
   const contentWidth = pageWidth - margin * 2;
+  const footerY = pageHeight - 12;
+  const contentMaxY = pageHeight - 22; // keep body above footer
   let y = margin;
 
+  const drawPageFooter = () => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(120, 53, 15);
+    doc.text("The Partner Behind Your Fulfillment", pageWidth / 2, footerY, {
+      align: "center",
+    });
+  };
+
   const ensureSpace = (needed: number) => {
-    if (y + needed <= pageHeight - 16) return;
+    if (y + needed <= contentMaxY) return;
     doc.addPage();
     y = margin;
   };
@@ -201,17 +212,18 @@ export async function generateInvoiceSavingsReportPdfBlob(
     y += 6;
   }
 
-  ensureSpace(52);
+  ensureSpace(48);
   const heroY = y;
   const padX = 6;
-  const padY = 7;
+  const padTop = 6;
+  const padBottom = 5;
   const ringReserve = 40;
   const textMaxW = contentWidth - ringReserve - padX;
 
-  // Measure stacked content so top/bottom padding stay even (old-design rhythm)
+  // Measure stacked content to mirror old-design rhythm (tight under amount + green line)
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
-  const titleH = 4;
+  const titleH = 3.5;
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
@@ -219,42 +231,46 @@ export async function generateInvoiceSavingsReportPdfBlob(
     "Your estimated savings compared with typical market pricing for this invoice",
     textMaxW
   ) as string[];
-  const subH = heroSub.length * 3.8;
+  const subH = heroSub.length * 3.6;
 
-  const amountH = 8;
+  const amountH = 6.5;
   const savingsLine =
     data.marketSubtotal > 0
       ? `Estimated ${data.savingsPercent}% savings compared with Estimated market pricing.`
       : "Add Est. Market Price on line items to show savings";
   doc.setFontSize(7.5);
   const savingsWrapped = doc.splitTextToSize(savingsLine, textMaxW) as string[];
-  const savingsH = savingsWrapped.length * 3.6;
+  const savingsH = savingsWrapped.length * 3.4;
 
-  // Gaps: title→sub 3, sub→amount 4, amount→savings 3 (compact like old card)
-  const contentH = titleH + 3 + subH + 4 + amountH + 3 + savingsH;
-  const heroH = Math.max(38, padY + contentH + padY);
+  // Gaps: title→sub 2.5, sub→amount 3, amount→savings 1.5 (old card was tight under $)
+  const gapTitleSub = 2.5;
+  const gapSubAmount = 3;
+  const gapAmountSavings = 1.5;
+  const contentH =
+    titleH + gapTitleSub + subH + gapSubAmount + amountH + gapAmountSavings + savingsH;
+  const heroH = Math.max(36, padTop + contentH + padBottom);
 
   doc.setFillColor(7, 26, 61);
   doc.roundedRect(margin, heroY, contentWidth, heroH, 3, 3, "F");
 
-  let textY = heroY + padY + 2.5;
+  let textY = heroY + padTop + 2;
 
   doc.setTextColor(253, 186, 116);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.text("PSF VALUE SUMMARY", margin + padX, textY);
-  textY += titleH + 3;
+  textY += titleH + gapTitleSub;
 
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.text(heroSub, margin + padX, textY);
-  textY += subH + 4;
+  textY += subH + gapSubAmount;
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(20);
-  doc.text(money(data.totalSaved), margin + padX, textY + 1.5);
-  textY += amountH + 3;
+  doc.text(money(data.totalSaved), margin + padX, textY + 1);
+  textY += amountH + gapAmountSavings;
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.5);
@@ -488,19 +504,13 @@ export async function generateInvoiceSavingsReportPdfBlob(
     contentWidth
   );
   doc.text(disclaimer, margin, y);
-  y += disclaimer.length * 4 + 4;
 
-  // Always pin tagline to center-bottom of the last page
-  const footerY = pageHeight - 14;
-  if (y > footerY - 6) {
-    doc.addPage();
+  // Footer on every page (including the last)
+  const totalPages = doc.getNumberOfPages();
+  for (let page = 1; page <= totalPages; page += 1) {
+    doc.setPage(page);
+    drawPageFooter();
   }
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.setTextColor(120, 53, 15);
-  doc.text("The Partner Behind Your Fulfillment", pageWidth / 2, footerY, {
-    align: "center",
-  });
 
   return doc.output("blob");
 }

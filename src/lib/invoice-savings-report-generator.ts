@@ -201,40 +201,67 @@ export async function generateInvoiceSavingsReportPdfBlob(
     y += 6;
   }
 
-  ensureSpace(48);
+  ensureSpace(52);
   const heroY = y;
-  const heroH = 44;
-  doc.setFillColor(7, 26, 61);
-  doc.roundedRect(margin, heroY, contentWidth, heroH, 3, 3, "F");
+  const padX = 6;
+  const padY = 7;
+  const ringReserve = 40;
+  const textMaxW = contentWidth - ringReserve - padX;
 
-  doc.setTextColor(253, 186, 116);
+  // Measure stacked content so top/bottom padding stay even (old-design rhythm)
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
-  doc.text("PSF VALUE SUMMARY", margin + 6, heroY + 8);
+  const titleH = 4;
 
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(8.5);
   doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
   const heroSub = doc.splitTextToSize(
     "Your estimated savings compared with typical market pricing for this invoice",
-    contentWidth - 48
+    textMaxW
   ) as string[];
-  doc.text(heroSub, margin + 6, heroY + 14);
+  const subH = heroSub.length * 3.8;
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(22);
-  doc.text(money(data.totalSaved), margin + 6, heroY + 30);
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(110, 231, 183);
+  const amountH = 8;
   const savingsLine =
     data.marketSubtotal > 0
       ? `Estimated ${data.savingsPercent}% savings compared with Estimated market pricing.`
       : "Add Est. Market Price on line items to show savings";
-  const savingsWrapped = doc.splitTextToSize(savingsLine, contentWidth - 48) as string[];
-  doc.text(savingsWrapped, margin + 6, heroY + 36);
+  doc.setFontSize(7.5);
+  const savingsWrapped = doc.splitTextToSize(savingsLine, textMaxW) as string[];
+  const savingsH = savingsWrapped.length * 3.6;
 
+  // Gaps: title→sub 3, sub→amount 4, amount→savings 3 (compact like old card)
+  const contentH = titleH + 3 + subH + 4 + amountH + 3 + savingsH;
+  const heroH = Math.max(38, padY + contentH + padY);
+
+  doc.setFillColor(7, 26, 61);
+  doc.roundedRect(margin, heroY, contentWidth, heroH, 3, 3, "F");
+
+  let textY = heroY + padY + 2.5;
+
+  doc.setTextColor(253, 186, 116);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text("PSF VALUE SUMMARY", margin + padX, textY);
+  textY += titleH + 3;
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.text(heroSub, margin + padX, textY);
+  textY += subH + 4;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.text(money(data.totalSaved), margin + padX, textY + 1.5);
+  textY += amountH + 3;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(110, 231, 183);
+  doc.text(savingsWrapped, margin + padX, textY);
+
+  // % ring — vertically centered in the card
   const cx = pageWidth - margin - 18;
   const cy = heroY + heroH / 2;
   doc.setDrawColor(249, 115, 22);
@@ -269,18 +296,23 @@ export async function generateInvoiceSavingsReportPdfBlob(
     left: number,
     width: number,
     title: string,
-    section: InvoiceSavingsSection
+    section: Pick<InvoiceSavingsSection, "paidSubtotal" | "marketSubtotal" | "totalSaved">,
+    options?: { titleSize?: number; labelW?: number; barHeight?: number; rowGap?: number }
   ) => {
     let localY = y;
+    const titleSize = options?.titleSize ?? 9;
+    const labelW = options?.labelW ?? 34;
+    const barHeight = options?.barHeight ?? 5;
+    const rowGap = options?.rowGap ?? 9;
+
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
+    doc.setFontSize(titleSize);
     doc.setTextColor(28, 25, 23);
     doc.text(title, left, localY);
-    localY += 5;
+    localY += titleSize >= 11 ? 6 : 5;
 
     const maxBar = Math.max(section.paidSubtotal, section.marketSubtotal, 1);
-    const labelW = 34;
-    const barMax = Math.max(12, width - labelW - 16);
+    const barMax = Math.max(12, width - labelW - 18);
     const rows: Array<{ label: string; value: number; rgb: [number, number, number] }> = [
       { label: "PSF Total", value: section.paidSubtotal, rgb: [249, 115, 22] },
       { label: "Est. Market", value: section.marketSubtotal, rgb: [100, 116, 139] },
@@ -289,19 +321,33 @@ export async function generateInvoiceSavingsReportPdfBlob(
 
     for (const row of rows) {
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(6.5);
+      doc.setFontSize(titleSize >= 11 ? 8 : 6.5);
       doc.setTextColor(55, 45, 35);
-      doc.text(row.label, left, localY + 3.2);
+      doc.text(row.label, left, localY + barHeight * 0.65);
       const w = Math.max(3, (row.value / maxBar) * barMax);
       doc.setFillColor(...row.rgb);
-      doc.roundedRect(left + labelW, localY, w, 5, 1, 1, "F");
+      doc.roundedRect(left + labelW, localY, w, barHeight, 1, 1, "F");
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(6.5);
-      doc.text(money(row.value), left + labelW + w + 1.5, localY + 3.5);
-      localY += 9;
+      doc.text(money(row.value), left + labelW + w + 1.5, localY + barHeight * 0.7);
+      localY += rowGap;
     }
     return localY;
   };
+
+  // Overall comparison (combined service + shipping) above the two detail charts
+  ensureSpace(40);
+  y = drawMiniChart(
+    margin,
+    contentWidth,
+    "Overall Comparison",
+    {
+      paidSubtotal: data.paidSubtotal,
+      marketSubtotal: data.marketSubtotal,
+      totalSaved: data.totalSaved,
+    },
+    { titleSize: 11, labelW: 42, barHeight: 6, rowGap: 11 }
+  );
+  y += 6;
 
   if (showServiceChart || showShippingChart) {
     ensureSpace(42);
@@ -442,6 +488,19 @@ export async function generateInvoiceSavingsReportPdfBlob(
     contentWidth
   );
   doc.text(disclaimer, margin, y);
+  y += disclaimer.length * 4 + 4;
+
+  // Always pin tagline to center-bottom of the last page
+  const footerY = pageHeight - 14;
+  if (y > footerY - 6) {
+    doc.addPage();
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(120, 53, 15);
+  doc.text("The Partner Behind Your Fulfillment", pageWidth / 2, footerY, {
+    align: "center",
+  });
 
   return doc.output("blob");
 }

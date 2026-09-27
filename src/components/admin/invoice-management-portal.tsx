@@ -138,6 +138,19 @@ interface ExternalInvoice {
   invoiceNumber: string;
   invoiceDate: string;
   dueDate: string;
+  /** Bill-from company (editable per invoice; defaults to Prep Services FBA). */
+  companyName?: string;
+  companyAddress?: string;
+  companyCityStateZip?: string;
+  companyCountry?: string;
+  companyPhone?: string;
+  companyEmail?: string;
+  /** Short payment note above FOB / terms / shipped via. */
+  invoiceNote?: string;
+  fobPoint?: string;
+  /** Invoice payment terms label (e.g. NET) — not the legal Terms & Conditions block. */
+  shippingTerms?: string;
+  shippedVia?: string;
   clientName: string;
   clientEmail: string;
   clientPhone?: string;
@@ -148,6 +161,8 @@ interface ExternalInvoice {
   clientCountry?: string;
   terms?: string;
   items: ExternalInvoiceItem[];
+  /** Optional shipping-label line items (merged into invoice PDF; separate on value report). */
+  shippingLabelItems?: ExternalInvoiceItem[];
   subtotal: number;
   salesTax: number;
   shippingCost: number;
@@ -175,12 +190,39 @@ interface ExternalInvoice {
 
 const TAX_RATE = 0.06625;
 
-const COMPANY_INFO = {
-  name: "Prep Services FBA",
-  addressLines: ["7000 Atrium Way B05", "Mount Laurel, NJ, 08054"],
-  phone: "+1-347-661-3010",
-  email: "info@prepservicesfba.com",
+const DEFAULT_COMPANY = {
+  companyName: "Prep Services FBA",
+  companyAddress: "7000 Atrium Way CO3",
+  companyCityStateZip: "Mount Laurel, NJ, 08054",
+  companyCountry: "United States",
+  companyPhone: "+1-347-661-3010",
+  companyEmail: "info@prepservicesfba.com",
 };
+
+const DEFAULT_INVOICE_META = {
+  invoiceNote:
+    "Please make all payments to Prep Services FBA LLC. All prices are F.O.B.",
+  fobPoint: "NEW JERSEY",
+  shippingTerms: "NET",
+  shippedVia: "Standard",
+};
+
+const resolveInvoiceCompany = (invoice: Partial<ExternalInvoice>) => ({
+  name: (invoice.companyName || "").trim() || DEFAULT_COMPANY.companyName,
+  addressLine: (invoice.companyAddress || "").trim() || DEFAULT_COMPANY.companyAddress,
+  cityStateZip:
+    (invoice.companyCityStateZip || "").trim() || DEFAULT_COMPANY.companyCityStateZip,
+  country: (invoice.companyCountry || "").trim() || DEFAULT_COMPANY.companyCountry,
+  phone: (invoice.companyPhone || "").trim() || DEFAULT_COMPANY.companyPhone,
+  email: (invoice.companyEmail || "").trim() || DEFAULT_COMPANY.companyEmail,
+});
+
+const resolveInvoiceMeta = (invoice: Partial<ExternalInvoice>) => ({
+  invoiceNote: (invoice.invoiceNote || "").trim() || DEFAULT_INVOICE_META.invoiceNote,
+  fobPoint: (invoice.fobPoint || "").trim() || DEFAULT_INVOICE_META.fobPoint,
+  shippingTerms: (invoice.shippingTerms || "").trim() || DEFAULT_INVOICE_META.shippingTerms,
+  shippedVia: (invoice.shippedVia || "").trim() || DEFAULT_INVOICE_META.shippedVia,
+});
 
 const INVOICE_TERMS = [
   "Invoices must be paid in full before work begins unless written credit terms are approved by management.",
@@ -279,6 +321,8 @@ const createEmptyInvoiceForm = (): Omit<ExternalInvoice, "id"> => {
     invoiceNumber: createInvoiceNumber(),
     invoiceDate: formatDateInputLocal(today),
     dueDate: formatDateInputLocal(due),
+    ...DEFAULT_COMPANY,
+    ...DEFAULT_INVOICE_META,
     clientName: "",
     clientEmail: "",
     clientPhone: "",
@@ -289,6 +333,7 @@ const createEmptyInvoiceForm = (): Omit<ExternalInvoice, "id"> => {
     clientCountry: "",
     terms: INVOICE_TERMS,
     items: [createEmptyItem()],
+    shippingLabelItems: [],
     subtotal: 0,
     salesTax: 0,
     shippingCost: 0,
@@ -507,12 +552,20 @@ export function InvoiceManagementPortal() {
         invoiceDate: formData.invoiceDate || "",
         clientName: formData.clientName,
         items: formData.items || [],
+        shippingLabelItems: formData.shippingLabelItems || [],
       }),
-    [formData.invoiceNumber, formData.invoiceDate, formData.clientName, formData.items]
+    [
+      formData.invoiceNumber,
+      formData.invoiceDate,
+      formData.clientName,
+      formData.items,
+      formData.shippingLabelItems,
+    ]
   );
 
   const recalculateTotals = (
     items: ExternalInvoiceItem[],
+    shippingLabelItems: ExternalInvoiceItem[],
     shippingCostValue: number,
     currentSalesTax?: number
   ) => {
@@ -520,16 +573,23 @@ export function InvoiceManagementPortal() {
       ...item,
       amount: Number(item.quantity || 0) * Number(item.unitPrice || 0),
     }));
-    const subtotal = updatedItems.reduce((sum, item) => sum + item.amount, 0);
-    // Use current sales tax if provided, otherwise calculate from TAX_RATE
-    const salesTax = currentSalesTax !== undefined 
-      ? Number(currentSalesTax) 
-      : Number((subtotal * TAX_RATE).toFixed(2));
+    const updatedLabelItems = shippingLabelItems.map((item) => ({
+      ...item,
+      amount: Number(item.quantity || 0) * Number(item.unitPrice || 0),
+    }));
+    const subtotal =
+      updatedItems.reduce((sum, item) => sum + item.amount, 0) +
+      updatedLabelItems.reduce((sum, item) => sum + item.amount, 0);
+    const salesTax =
+      currentSalesTax !== undefined
+        ? Number(currentSalesTax)
+        : Number((subtotal * TAX_RATE).toFixed(2));
     const total = Number((subtotal + salesTax + shippingCostValue).toFixed(2));
     const amountPaid = formData.amountPaid || 0;
     const outstandingBalance = Math.max(0, Number((total - amountPaid).toFixed(2)));
     return {
       items: updatedItems,
+      shippingLabelItems: updatedLabelItems,
       subtotal,
       salesTax,
       total,
@@ -800,7 +860,12 @@ export function InvoiceManagementPortal() {
       );
       return {
         ...prev,
-        ...recalculateTotals(nextItems, toNumber(prev.shippingCost), prev.salesTax),
+        ...recalculateTotals(
+          nextItems,
+          prev.shippingLabelItems || [],
+          toNumber(prev.shippingCost),
+          prev.salesTax
+        ),
       };
     });
   };
@@ -810,17 +875,69 @@ export function InvoiceManagementPortal() {
       const nextItems = [...prev.items, createEmptyItem()];
       return {
         ...prev,
-        ...recalculateTotals(nextItems, toNumber(prev.shippingCost), prev.salesTax),
+        ...recalculateTotals(
+          nextItems,
+          prev.shippingLabelItems || [],
+          toNumber(prev.shippingCost),
+          prev.salesTax
+        ),
       };
     });
   };
 
   const removeItem = (id: string) => {
     setFormData((prev) => {
-      const nextItems = prev.items.length > 1 ? prev.items.filter((item) => item.id !== id) : prev.items;
+      const nextItems =
+        prev.items.length > 1 ? prev.items.filter((item) => item.id !== id) : prev.items;
       return {
         ...prev,
-        ...recalculateTotals(nextItems, toNumber(prev.shippingCost), prev.salesTax),
+        ...recalculateTotals(
+          nextItems,
+          prev.shippingLabelItems || [],
+          toNumber(prev.shippingCost),
+          prev.salesTax
+        ),
+      };
+    });
+  };
+
+  const updateShippingLabelItem = (
+    id: string,
+    field: keyof ExternalInvoiceItem,
+    value: string
+  ) => {
+    setFormData((prev) => {
+      const nextLabels = (prev.shippingLabelItems || []).map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              [field]: field === "description" ? value : toNumber(value),
+            }
+          : item
+      );
+      return {
+        ...prev,
+        ...recalculateTotals(prev.items, nextLabels, toNumber(prev.shippingCost), prev.salesTax),
+      };
+    });
+  };
+
+  const addShippingLabelItem = () => {
+    setFormData((prev) => {
+      const nextLabels = [...(prev.shippingLabelItems || []), createEmptyItem()];
+      return {
+        ...prev,
+        ...recalculateTotals(prev.items, nextLabels, toNumber(prev.shippingCost), prev.salesTax),
+      };
+    });
+  };
+
+  const removeShippingLabelItem = (id: string) => {
+    setFormData((prev) => {
+      const nextLabels = (prev.shippingLabelItems || []).filter((item) => item.id !== id);
+      return {
+        ...prev,
+        ...recalculateTotals(prev.items, nextLabels, toNumber(prev.shippingCost), prev.salesTax),
       };
     });
   };
@@ -842,14 +959,7 @@ export function InvoiceManagementPortal() {
       invoiceNumber: invoice.invoiceNumber,
       invoiceDate: formatDateForPdf(invoice.invoiceDate) || invoice.invoiceDate,
       dueDate: formatDateForPdf(invoice.dueDate),
-    company: {
-      name: COMPANY_INFO.name,
-      email: COMPANY_INFO.email,
-      phone: COMPANY_INFO.phone,
-      addressLine: COMPANY_INFO.addressLines[0] || "",
-      cityStateZip: COMPANY_INFO.addressLines[1] || "",
-      country: "United States",
-    },
+    company: resolveInvoiceCompany(invoice),
     soldTo: {
       name: invoice.clientName || "",
       email: invoice.clientEmail || "",
@@ -858,12 +968,27 @@ export function InvoiceManagementPortal() {
       cityStateZip: [invoice.clientCity, invoice.clientState, invoice.clientZip].filter(Boolean).join(", "),
       country: invoice.clientCountry || "",
     },
-    items: invoice.items.map((item) => ({
-      description: item.description || "",
-      quantity: Number(item.quantity || 0),
-      unitPrice: Number(item.unitPrice || 0),
-      amount: Number(item.amount || 0),
-    })),
+    items: [
+      ...invoice.items.map((item) => ({
+        description: item.description || "",
+        quantity: Number(item.quantity || 0),
+        unitPrice: Number(item.unitPrice || 0),
+        amount: Number(item.amount || 0),
+      })),
+      ...(invoice.shippingLabelItems || [])
+        .filter(
+          (item) =>
+            String(item.description || "").trim() ||
+            Number(item.amount || 0) > 0 ||
+            Number(item.quantity || 0) > 0
+        )
+        .map((item) => ({
+          description: item.description || "",
+          quantity: Number(item.quantity || 0),
+          unitPrice: Number(item.unitPrice || 0),
+          amount: Number(item.amount || 0),
+        })),
+    ],
     subtotal: invoice.subtotal,
     salesTax: invoice.salesTax || 0,
     shippingCost: invoice.shippingCost || 0,
@@ -871,6 +996,7 @@ export function InvoiceManagementPortal() {
     lateFee: invoice.lateFee || 0,
     total: getGrandTotalWithLateFee(invoice),
     terms: invoice.terms,
+    ...resolveInvoiceMeta(invoice),
   };
   };
 
@@ -1028,6 +1154,7 @@ export function InvoiceManagementPortal() {
         invoiceDate: invoice.invoiceDate,
         clientName: invoice.clientName,
         items: invoice.items || [],
+        shippingLabelItems: invoice.shippingLabelItems || [],
       });
       const overdueAttachments = savingsFile ? [invoiceFile, savingsFile] : [invoiceFile];
 
@@ -1398,6 +1525,7 @@ Prep Services FBA Team`;
       invoiceDate: invoice.invoiceDate,
       clientName: invoice.clientName,
       items: invoice.items || [],
+      shippingLabelItems: invoice.shippingLabelItems || [],
     });
     const updateAttachments = savingsFile ? [invoiceFile, savingsFile] : [invoiceFile];
     const idToken = await user.getIdToken();
@@ -1608,6 +1736,7 @@ Prep Services FBA Team`;
         invoiceDate: invoice.invoiceDate,
         clientName: invoice.clientName,
         items: invoice.items || [],
+        shippingLabelItems: invoice.shippingLabelItems || [],
       });
       if (savingsFile) {
         await new Promise((resolve) => setTimeout(resolve, 350));
@@ -1788,9 +1917,31 @@ Prep Services FBA Team`;
       compareUnitPrice: Number(it.compareUnitPrice ?? 0),
       amount: Number(it.amount ?? 0),
     }));
+    const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(
+      (it: ExternalInvoiceItem) => ({
+        id: it.id || crypto.randomUUID(),
+        description: String(it.description ?? ""),
+        quantity: Number(it.quantity ?? 0),
+        unitPrice: Number(it.unitPrice ?? 0),
+        compareUnitPrice: Number(it.compareUnitPrice ?? 0),
+        amount: Number(it.amount ?? 0),
+      })
+    );
     setFormData({
       ...invoice,
+      ...DEFAULT_COMPANY,
+      companyName: invoice.companyName || DEFAULT_COMPANY.companyName,
+      companyAddress: invoice.companyAddress || DEFAULT_COMPANY.companyAddress,
+      companyCityStateZip: invoice.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
+      companyCountry: invoice.companyCountry || DEFAULT_COMPANY.companyCountry,
+      companyPhone: invoice.companyPhone || DEFAULT_COMPANY.companyPhone,
+      companyEmail: invoice.companyEmail || DEFAULT_COMPANY.companyEmail,
+      invoiceNote: invoice.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
+      fobPoint: invoice.fobPoint || DEFAULT_INVOICE_META.fobPoint,
+      shippingTerms: invoice.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
+      shippedVia: invoice.shippedVia || DEFAULT_INVOICE_META.shippedVia,
       items: normalizedItems.length ? normalizedItems : [createEmptyItem()],
+      shippingLabelItems: normalizedShippingLabels,
     });
     setEditingInvoiceId(invoice.id);
     setActiveTab("new");
@@ -1957,6 +2108,7 @@ Prep Services FBA Team`;
         invoiceDate: activeEmailInvoice.invoiceDate,
         clientName: activeEmailInvoice.clientName,
         items: activeEmailInvoice.items || [],
+        shippingLabelItems: activeEmailInvoice.shippingLabelItems || [],
       });
       const attachmentsToSend = savingsFile
         ? [invoiceFile, savingsFile, ...emailForm.attachments]
@@ -3044,14 +3196,106 @@ Prep Services FBA Team`;
                 <div className="border-t border-amber-200/70 pt-4"></div>
 
                 <div className="grid gap-4 md:grid-cols-2">
-                  <div className="border border-amber-200/70 rounded-md p-4 text-sm space-y-1">
+                  <div className="border border-amber-200/70 rounded-md p-4 text-sm space-y-3">
                     <p className="text-xs uppercase text-amber-700 font-semibold">Company Details</p>
-                    <p className="font-semibold">{COMPANY_INFO.name}</p>
-                    {COMPANY_INFO.addressLines.map((line) => (
-                      <p key={line}>{line}</p>
-                    ))}
-                    <p>Phone: {COMPANY_INFO.phone}</p>
-                    <p>Email: {COMPANY_INFO.email}</p>
+                    {isPrintMode ? (
+                      <div className="space-y-1">
+                        <p className="font-semibold">
+                          {formData.companyName || DEFAULT_COMPANY.companyName}
+                        </p>
+                        {(formData.companyAddress || DEFAULT_COMPANY.companyAddress) && (
+                          <p>{formData.companyAddress || DEFAULT_COMPANY.companyAddress}</p>
+                        )}
+                        {(formData.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip) && (
+                          <p>
+                            {formData.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip}
+                          </p>
+                        )}
+                        {(formData.companyCountry || DEFAULT_COMPANY.companyCountry) && (
+                          <p>{formData.companyCountry || DEFAULT_COMPANY.companyCountry}</p>
+                        )}
+                        <p>Phone: {formData.companyPhone || DEFAULT_COMPANY.companyPhone}</p>
+                        <p>Email: {formData.companyEmail || DEFAULT_COMPANY.companyEmail}</p>
+                      </div>
+                    ) : (
+                      <div className="grid gap-2">
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Company Name</Label>
+                          <Input
+                            value={formData.companyName || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({ ...prev, companyName: event.target.value }))
+                            }
+                            placeholder={DEFAULT_COMPANY.companyName}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Address</Label>
+                          <Input
+                            value={formData.companyAddress || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                companyAddress: event.target.value,
+                              }))
+                            }
+                            placeholder={DEFAULT_COMPANY.companyAddress}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground">City, State, ZIP</Label>
+                          <Input
+                            value={formData.companyCityStateZip || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                companyCityStateZip: event.target.value,
+                              }))
+                            }
+                            placeholder={DEFAULT_COMPANY.companyCityStateZip}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Country</Label>
+                          <Input
+                            value={formData.companyCountry || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                companyCountry: event.target.value,
+                              }))
+                            }
+                            placeholder={DEFAULT_COMPANY.companyCountry}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Phone</Label>
+                          <Input
+                            value={formData.companyPhone || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({ ...prev, companyPhone: event.target.value }))
+                            }
+                            placeholder={DEFAULT_COMPANY.companyPhone}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground">Email</Label>
+                          <Input
+                            value={formData.companyEmail || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({ ...prev, companyEmail: event.target.value }))
+                            }
+                            placeholder={DEFAULT_COMPANY.companyEmail}
+                            className="h-9"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="border border-amber-200/70 rounded-md p-4 text-sm space-y-3">
                     <p className="text-xs uppercase text-amber-700 font-semibold">Sold To</p>
@@ -3188,24 +3432,84 @@ Prep Services FBA Team`;
                   </div>
                 </div>
 
-                <div className="space-y-2 text-sm">
-                  <p className="font-semibold text-amber-800">
-                    NOTE: Please make all payments to Prep Services FBA LLC. All prices are F.O.B.
-                  </p>
-                  <div className="grid grid-cols-2 gap-4 text-xs">
-                    <div>
-                      <span className="font-semibold">FOB POINT:</span> <span>NEW JERSEY</span>
+                <div className="space-y-3 text-sm">
+                  {isPrintMode ? (
+                    <>
+                      <p className="font-semibold text-amber-800">
+                        NOTE: {formData.invoiceNote || DEFAULT_INVOICE_META.invoiceNote}
+                      </p>
+                      <div className="grid grid-cols-2 gap-4 text-xs">
+                        <div>
+                          <span className="font-semibold">FOB POINT:</span>{" "}
+                          <span>{formData.fobPoint || DEFAULT_INVOICE_META.fobPoint}</span>
+                        </div>
+                        <div>
+                          <span className="font-semibold">TERMS:</span>{" "}
+                          <span>{formData.shippingTerms || DEFAULT_INVOICE_META.shippingTerms}</span>
+                        </div>
+                        <div>
+                          <span className="font-semibold">SHIPPED VIA:</span>{" "}
+                          <span>{formData.shippedVia || DEFAULT_INVOICE_META.shippedVia}</span>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="grid gap-3 rounded-md border border-amber-200/70 p-4">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">NOTE</Label>
+                        <Input
+                          value={formData.invoiceNote || ""}
+                          onChange={(event) =>
+                            setFormData((prev) => ({ ...prev, invoiceNote: event.target.value }))
+                          }
+                          placeholder={DEFAULT_INVOICE_META.invoiceNote}
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground">FOB Point</Label>
+                          <Input
+                            value={formData.fobPoint || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({ ...prev, fobPoint: event.target.value }))
+                            }
+                            placeholder={DEFAULT_INVOICE_META.fobPoint}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground">Terms</Label>
+                          <Input
+                            value={formData.shippingTerms || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                shippingTerms: event.target.value,
+                              }))
+                            }
+                            placeholder={DEFAULT_INVOICE_META.shippingTerms}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs text-muted-foreground">Shipped Via</Label>
+                          <Input
+                            value={formData.shippedVia || ""}
+                            onChange={(event) =>
+                              setFormData((prev) => ({ ...prev, shippedVia: event.target.value }))
+                            }
+                            placeholder={DEFAULT_INVOICE_META.shippedVia}
+                            className="h-9"
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="font-semibold">TERMS:</span> <span>NET</span>
-                    </div>
-                    <div>
-                      <span className="font-semibold">SHIPPED VIA:</span> <span>Standard</span>
-                    </div>
-                  </div>
+                  )}
                 </div>
 
                 <div className="space-y-3">
+                  <h3 className="font-semibold text-amber-900">Services</h3>
                   {/* Desktop header - hidden on mobile where each row has its own labels */}
                   <div className="hidden md:grid grid-cols-12 gap-2 items-center border-b border-amber-200/70 pb-2">
                     <div className="col-span-4 pr-2">
@@ -3327,6 +3631,167 @@ Prep Services FBA Team`;
                       Add Item
                     </Button>
                   </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <h3 className="font-semibold text-amber-900">Shipping Labels</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Optional. These lines merge into the invoice PDF and appear as a separate
+                      comparison on the value report.
+                    </p>
+                  </div>
+                  {(formData.shippingLabelItems || []).length > 0 ? (
+                    <div className="hidden md:grid grid-cols-12 gap-2 items-center border-b border-amber-200/70 pb-2">
+                      <div className="col-span-4 pr-2">
+                        <span className="text-sm font-semibold text-amber-800">Label Description</span>
+                      </div>
+                      <div className="col-span-1 text-center">
+                        <span className="text-sm font-semibold text-amber-800">Qty</span>
+                      </div>
+                      <div className="col-span-2 text-right">
+                        <span className="text-sm font-semibold text-amber-800">Est. Market Price</span>
+                      </div>
+                      <div className="col-span-2 text-right">
+                        <span className="text-sm font-semibold text-amber-800">Your price</span>
+                      </div>
+                      <div className="col-span-2 text-right">
+                        <span className="text-sm font-semibold text-amber-800">Amount</span>
+                      </div>
+                      <div className="col-span-1" />
+                    </div>
+                  ) : null}
+                  {(formData.shippingLabelItems || []).map((item) => {
+                    const compare = Number(item.compareUnitPrice || 0);
+                    const unit = Number(item.unitPrice || 0);
+                    const qty = Number(item.quantity || 0);
+                    const lineSaved =
+                      compare > unit && compare > 0
+                        ? Number(((compare - unit) * qty).toFixed(2))
+                        : 0;
+                    return (
+                      <div
+                        key={item.id}
+                        className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-2 items-center border-b border-amber-100/50 pb-3 md:pb-2 invoice-actions"
+                      >
+                        <div className="md:col-span-4 space-y-1 min-w-0 pr-2 md:pr-3">
+                          <label className="text-xs font-medium text-amber-800 md:hidden">
+                            Label Description
+                          </label>
+                          {isPrintMode ? (
+                            <p className="text-sm whitespace-pre-wrap break-words">
+                              {item.description || "—"}
+                            </p>
+                          ) : (
+                            <Textarea
+                              value={item.description}
+                              onChange={(event) =>
+                                updateShippingLabelItem(item.id, "description", event.target.value)
+                              }
+                              placeholder="Shipping label description"
+                              rows={2}
+                              className="min-h-9 border-amber-200/70 w-full resize-y"
+                            />
+                          )}
+                        </div>
+                        <div className="md:col-span-1 space-y-1">
+                          <label className="text-xs font-medium text-amber-800 md:hidden">Qty</label>
+                          {isPrintMode ? (
+                            <p className="text-sm text-center">{Number(item.quantity ?? 0)}</p>
+                          ) : (
+                            <Input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={item.quantity != null ? String(item.quantity) : ""}
+                              onChange={(event) =>
+                                updateShippingLabelItem(item.id, "quantity", event.target.value)
+                              }
+                              className="h-9 text-center border-amber-200/70 w-full"
+                            />
+                          )}
+                        </div>
+                        <div className="md:col-span-2 space-y-1">
+                          <label className="text-xs font-medium text-amber-800 md:hidden">
+                            Est. Market Price ($)
+                          </label>
+                          {isPrintMode ? (
+                            <p className="text-sm text-right text-muted-foreground">
+                              ${Number(item.compareUnitPrice ?? 0).toFixed(2)}
+                            </p>
+                          ) : (
+                            <Input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={
+                                item.compareUnitPrice != null ? String(item.compareUnitPrice) : ""
+                              }
+                              onChange={(event) =>
+                                updateShippingLabelItem(
+                                  item.id,
+                                  "compareUnitPrice",
+                                  event.target.value
+                                )
+                              }
+                              className="h-9 text-right border-amber-200/70 w-full"
+                              placeholder="Est. market $"
+                            />
+                          )}
+                        </div>
+                        <div className="md:col-span-2 space-y-1">
+                          <label className="text-xs font-medium text-amber-800 md:hidden">
+                            Your price ($)
+                          </label>
+                          {isPrintMode ? (
+                            <p className="text-sm text-right">
+                              ${Number(item.unitPrice ?? 0).toFixed(2)}
+                            </p>
+                          ) : (
+                            <Input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={item.unitPrice != null ? String(item.unitPrice) : ""}
+                              onChange={(event) =>
+                                updateShippingLabelItem(item.id, "unitPrice", event.target.value)
+                              }
+                              className="h-9 text-right border-amber-200/70 w-full"
+                              placeholder="0.00"
+                            />
+                          )}
+                          {lineSaved > 0 ? (
+                            <p className="text-[11px] text-emerald-700 text-right font-medium">
+                              Saves ${lineSaved.toFixed(2)}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="md:col-span-2 flex items-center justify-between md:justify-end gap-2">
+                          <label className="text-xs font-medium text-amber-800 md:hidden">
+                            Amount
+                          </label>
+                          <p className="text-sm text-right font-semibold">
+                            ${Number(item.amount ?? 0).toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="md:col-span-1 flex justify-end invoice-remove-column">
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => removeShippingLabelItem(item.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="invoice-actions pt-2">
+                    <Button variant="outline" size="sm" onClick={addShippingLabelItem}>
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add Shipping Label
+                    </Button>
+                  </div>
                   {formSavingsPreview && formSavingsPreview.totalSaved > 0 ? (
                     <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm">
                       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3336,8 +3801,8 @@ Prep Services FBA Team`;
                             Value report preview
                           </p>
                           <p className="text-emerald-800/80 text-xs max-w-xl">
-                            Download PDF includes a PrepCorex-style value report with charts and
-                            line detail so the client sees why this invoice is a fair price.
+                            Value report shows Service Comparison and Shipping Label Comparison
+                            side by side, plus separate tables for each.
                           </p>
                         </div>
                         <div className="text-right">
@@ -3357,8 +3822,8 @@ Prep Services FBA Team`;
                   ) : !isPrintMode ? (
                     <p className="text-xs text-muted-foreground">
                       Tip: enter an <span className="font-medium">Est. Market Price</span>{" "}
-                      above your charged price on each line to auto-attach a graphical value
-                      report on download and email.
+                      above your charged price on service or shipping-label lines to auto-attach
+                      a graphical value report on download and email.
                     </p>
                   ) : null}
                 </div>
@@ -3381,7 +3846,12 @@ Prep Services FBA Team`;
                           value={formData.salesTax}
                           onChange={(event) => {
                             const salesTax = Number(event.target.value || 0);
-                            const totals = recalculateTotals(formData.items, formData.shippingCost, salesTax);
+                            const totals = recalculateTotals(
+                              formData.items,
+                              formData.shippingLabelItems || [],
+                              formData.shippingCost,
+                              salesTax
+                            );
                             setFormData((prev) => ({ ...prev, ...totals }));
                           }}
                           className="h-8 w-28 text-right"
@@ -3400,7 +3870,12 @@ Prep Services FBA Team`;
                           value={formData.shippingCost}
                           onChange={(event) => {
                             const shippingCost = Number(event.target.value || 0);
-                            const totals = recalculateTotals(formData.items, shippingCost, formData.salesTax);
+                            const totals = recalculateTotals(
+                              formData.items,
+                              formData.shippingLabelItems || [],
+                              shippingCost,
+                              formData.salesTax
+                            );
                             setFormData((prev) => ({ ...prev, shippingCost, ...totals }));
                           }}
                           className="h-8 w-28 text-right"

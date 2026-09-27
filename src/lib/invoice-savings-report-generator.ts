@@ -19,11 +19,20 @@ export interface InvoiceSavingsLineItem {
   savedAmount: number;
 }
 
+export interface InvoiceSavingsSection {
+  items: InvoiceSavingsLineItem[];
+  paidSubtotal: number;
+  marketSubtotal: number;
+  totalSaved: number;
+  savingsPercent: number;
+}
+
 export interface InvoiceSavingsReportData {
   invoiceNumber: string;
   invoiceDate: string;
   clientName: string;
-  items: InvoiceSavingsLineItem[];
+  service: InvoiceSavingsSection;
+  shippingLabels: InvoiceSavingsSection;
   paidSubtotal: number;
   marketSubtotal: number;
   totalSaved: number;
@@ -64,32 +73,33 @@ export function invoiceHasSavingsCompare(items: InvoiceSavingsSourceItem[] | und
   });
 }
 
-export function buildInvoiceSavingsReportData(input: {
-  invoiceNumber: string;
-  invoiceDate: string;
-  clientName?: string;
-  items: InvoiceSavingsSourceItem[];
-}): InvoiceSavingsReportData | null {
-  if (!invoiceHasSavingsCompare(input.items)) return null;
-
-  const lines: InvoiceSavingsLineItem[] = input.items.map((item) => {
-    const quantity = Number(item.quantity || 0);
-    const unitPrice = Number(item.unitPrice || 0);
-    const compareUnitPrice = Number(item.compareUnitPrice || 0);
-    const amount = Number(item.amount ?? quantity * unitPrice);
-    const hasCompare = compareUnitPrice > 0 && compareUnitPrice > unitPrice;
-    const compareAmount = hasCompare ? Number((compareUnitPrice * quantity).toFixed(2)) : amount;
-    const savedAmount = hasCompare ? Number((compareAmount - amount).toFixed(2)) : 0;
-    return {
-      description: String(item.description || "").trim() || "Line item",
-      quantity,
-      unitPrice,
-      compareUnitPrice: hasCompare ? compareUnitPrice : unitPrice,
-      amount,
-      compareAmount,
-      savedAmount,
-    };
-  });
+function buildSavingsSection(items: InvoiceSavingsSourceItem[]): InvoiceSavingsSection {
+  const lines: InvoiceSavingsLineItem[] = (items || [])
+    .filter((item) => {
+      const description = String(item.description || "").trim();
+      const quantity = Number(item.quantity || 0);
+      const unitPrice = Number(item.unitPrice || 0);
+      const amount = Number(item.amount ?? quantity * unitPrice);
+      return Boolean(description || amount || quantity || unitPrice || item.compareUnitPrice);
+    })
+    .map((item) => {
+      const quantity = Number(item.quantity || 0);
+      const unitPrice = Number(item.unitPrice || 0);
+      const compareUnitPrice = Number(item.compareUnitPrice || 0);
+      const amount = Number(item.amount ?? quantity * unitPrice);
+      const hasCompare = compareUnitPrice > 0 && compareUnitPrice > unitPrice;
+      const compareAmount = hasCompare ? Number((compareUnitPrice * quantity).toFixed(2)) : amount;
+      const savedAmount = hasCompare ? Number((compareAmount - amount).toFixed(2)) : 0;
+      return {
+        description: String(item.description || "").trim() || "Line item",
+        quantity,
+        unitPrice,
+        compareUnitPrice: hasCompare ? compareUnitPrice : unitPrice,
+        amount,
+        compareAmount,
+        savedAmount,
+      };
+    });
 
   const paidSubtotal = Number(lines.reduce((sum, line) => sum + line.amount, 0).toFixed(2));
   const marketSubtotal = Number(lines.reduce((sum, line) => sum + line.compareAmount, 0).toFixed(2));
@@ -98,10 +108,42 @@ export function buildInvoiceSavingsReportData(input: {
     marketSubtotal > 0 ? Math.round((totalSaved / marketSubtotal) * 100) : 0;
 
   return {
+    items: lines,
+    paidSubtotal,
+    marketSubtotal,
+    totalSaved,
+    savingsPercent,
+  };
+}
+
+export function buildInvoiceSavingsReportData(input: {
+  invoiceNumber: string;
+  invoiceDate: string;
+  clientName?: string;
+  items: InvoiceSavingsSourceItem[];
+  shippingLabelItems?: InvoiceSavingsSourceItem[];
+}): InvoiceSavingsReportData | null {
+  const hasService = invoiceHasSavingsCompare(input.items);
+  const hasShipping = invoiceHasSavingsCompare(input.shippingLabelItems);
+  if (!hasService && !hasShipping) return null;
+
+  const service = buildSavingsSection(input.items || []);
+  const shippingLabels = buildSavingsSection(input.shippingLabelItems || []);
+
+  const paidSubtotal = Number((service.paidSubtotal + shippingLabels.paidSubtotal).toFixed(2));
+  const marketSubtotal = Number(
+    (service.marketSubtotal + shippingLabels.marketSubtotal).toFixed(2)
+  );
+  const totalSaved = Math.max(0, Number((marketSubtotal - paidSubtotal).toFixed(2)));
+  const savingsPercent =
+    marketSubtotal > 0 ? Math.round((totalSaved / marketSubtotal) * 100) : 0;
+
+  return {
     invoiceNumber: input.invoiceNumber,
     invoiceDate: input.invoiceDate,
     clientName: input.clientName || "",
-    items: lines,
+    service,
+    shippingLabels,
     paidSubtotal,
     marketSubtotal,
     totalSaved,
@@ -159,7 +201,6 @@ export async function generateInvoiceSavingsReportPdfBlob(
     y += 6;
   }
 
-  // Hero card — PrepCorex-style value summary
   ensureSpace(48);
   const heroY = y;
   const heroH = 44;
@@ -194,7 +235,6 @@ export async function generateInvoiceSavingsReportPdfBlob(
   const savingsWrapped = doc.splitTextToSize(savingsLine, contentWidth - 48) as string[];
   doc.text(savingsWrapped, margin + 6, heroY + 36);
 
-  // % ring (true circle — equal radius in mm)
   const cx = pageWidth - margin - 18;
   const cy = heroY + heroH / 2;
   doc.setDrawColor(249, 115, 22);
@@ -218,57 +258,78 @@ export async function generateInvoiceSavingsReportPdfBlob(
     margin,
     y
   );
-  y += 8;
-
-  // Comparison bars
-  ensureSpace(36);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.setTextColor(28, 25, 23);
-  doc.text("PSF vs Estimated Market Pricing", margin, y);
-  y += 6;
-
-  const maxBar = Math.max(data.paidSubtotal, data.marketSubtotal, 1);
-  const labelColWidth = 48;
-  const barMaxWidth = contentWidth - labelColWidth - 18;
-
-  const drawBar = (label: string, value: number, rgb: [number, number, number]) => {
-    ensureSpace(14);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(55, 45, 35);
-    doc.text(label, margin, y + 3.5);
-    const w = Math.max(4, (value / maxBar) * barMaxWidth);
-    doc.setFillColor(...rgb);
-    doc.roundedRect(margin + labelColWidth, y, w, 6, 1, 1, "F");
-    doc.setFont("helvetica", "bold");
-    doc.text(money(value), margin + labelColWidth + 2 + w, y + 4.5);
-    y += 11;
-  };
-
-  drawBar("PSF Total", data.paidSubtotal, [249, 115, 22]);
-  drawBar("Estimated Market Total", data.marketSubtotal, [100, 116, 139]);
-  drawBar("Estimated Saving", data.totalSaved, [16, 185, 129]);
-  y += 4;
-
-  // Line detail
-  ensureSpace(28);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.setTextColor(28, 25, 23);
-  doc.text("Service Price Comparison", margin, y);
-  y += 3;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(100, 90, 80);
-  doc.text(
-    "See how each invoiced service compares with estimated market pricing.",
-    margin,
-    y + 4
-  );
   y += 10;
 
-  // Right edges for numeric columns (A4 ~210mm; leave clear gaps so headers never overlap)
+  const gap = 4;
+  const chartWidth = (contentWidth - gap) / 2;
+  const showServiceChart = data.service.items.length > 0;
+  const showShippingChart = data.shippingLabels.items.length > 0;
+
+  const drawMiniChart = (
+    left: number,
+    width: number,
+    title: string,
+    section: InvoiceSavingsSection
+  ) => {
+    let localY = y;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(28, 25, 23);
+    doc.text(title, left, localY);
+    localY += 5;
+
+    const maxBar = Math.max(section.paidSubtotal, section.marketSubtotal, 1);
+    const labelW = 34;
+    const barMax = Math.max(12, width - labelW - 16);
+    const rows: Array<{ label: string; value: number; rgb: [number, number, number] }> = [
+      { label: "PSF Total", value: section.paidSubtotal, rgb: [249, 115, 22] },
+      { label: "Est. Market", value: section.marketSubtotal, rgb: [100, 116, 139] },
+      { label: "Est. Saving", value: section.totalSaved, rgb: [16, 185, 129] },
+    ];
+
+    for (const row of rows) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(6.5);
+      doc.setTextColor(55, 45, 35);
+      doc.text(row.label, left, localY + 3.2);
+      const w = Math.max(3, (row.value / maxBar) * barMax);
+      doc.setFillColor(...row.rgb);
+      doc.roundedRect(left + labelW, localY, w, 5, 1, 1, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(6.5);
+      doc.text(money(row.value), left + labelW + w + 1.5, localY + 3.5);
+      localY += 9;
+    }
+    return localY;
+  };
+
+  if (showServiceChart || showShippingChart) {
+    ensureSpace(42);
+    const chartStartY = y;
+    let serviceEnd = chartStartY;
+    let shippingEnd = chartStartY;
+
+    if (showServiceChart && showShippingChart) {
+      serviceEnd = drawMiniChart(margin, chartWidth, "Service Comparison", data.service);
+      shippingEnd = drawMiniChart(
+        margin + chartWidth + gap,
+        chartWidth,
+        "Shipping Label Comparison",
+        data.shippingLabels
+      );
+    } else if (showServiceChart) {
+      serviceEnd = drawMiniChart(margin, contentWidth, "Service Comparison", data.service);
+    } else {
+      shippingEnd = drawMiniChart(
+        margin,
+        contentWidth,
+        "Shipping Label Comparison",
+        data.shippingLabels
+      );
+    }
+    y = Math.max(serviceEnd, shippingEnd) + 4;
+  }
+
   const rightEdge = pageWidth - margin;
   const col = {
     desc: margin,
@@ -279,45 +340,80 @@ export async function generateInvoiceSavingsReportPdfBlob(
   };
   const descWidth = col.qty - margin - 8;
 
-  const drawTableHeader = () => {
-    doc.setFillColor(254, 243, 226);
-    doc.rect(margin, y - 4, contentWidth, 8, "F");
+  const drawComparisonTable = (
+    title: string,
+    subtitle: string,
+    section: InvoiceSavingsSection
+  ) => {
+    if (section.items.length === 0) return;
+
+    ensureSpace(28);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
-    doc.setTextColor(120, 53, 15);
-    doc.text("Description", col.desc + 1, y);
-    doc.text("Qty", col.qty, y, { align: "right" });
-    doc.text("Est. Market Price", col.market, y, { align: "right" });
-    doc.text("Your price", col.yours, y, { align: "right" });
-    doc.text("You save", col.save, y, { align: "right" });
-    y += 6;
+    doc.setFontSize(11);
+    doc.setTextColor(28, 25, 23);
+    doc.text(title, margin, y);
+    y += 3;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(100, 90, 80);
+    doc.text(subtitle, margin, y + 4);
+    y += 10;
+
+    const drawTableHeader = () => {
+      doc.setFillColor(254, 243, 226);
+      doc.rect(margin, y - 4, contentWidth, 8, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(7);
+      doc.setTextColor(120, 53, 15);
+      doc.text("Description", col.desc + 1, y);
+      doc.text("Qty", col.qty, y, { align: "right" });
+      doc.text("Est. Market Price", col.market, y, { align: "right" });
+      doc.text("Your price", col.yours, y, { align: "right" });
+      doc.text("You save", col.save, y, { align: "right" });
+      y += 6;
+    };
+
+    drawTableHeader();
+
+    for (const line of section.items) {
+      const descLines = doc.splitTextToSize(line.description, descWidth) as string[];
+      const rowHeight = Math.max(8, descLines.length * 4 + 2);
+      ensureSpace(rowHeight + 2);
+      if (y < margin + 10) drawTableHeader();
+
+      doc.setDrawColor(245, 230, 210);
+      doc.line(margin, y + rowHeight - 1, pageWidth - margin, y + rowHeight - 1);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.setTextColor(40, 35, 30);
+      doc.text(descLines, col.desc + 1, y + 3);
+      doc.text(String(line.quantity), col.qty, y + 3, { align: "right" });
+      doc.text(money(line.compareAmount), col.market, y + 3, { align: "right" });
+      doc.text(money(line.amount), col.yours, y + 3, { align: "right" });
+      doc.setTextColor(
+        line.savedAmount > 0 ? 5 : 100,
+        line.savedAmount > 0 ? 150 : 116,
+        line.savedAmount > 0 ? 105 : 139
+      );
+      doc.setFont("helvetica", "bold");
+      doc.text(money(line.savedAmount), col.save, y + 3, { align: "right" });
+      y += rowHeight;
+    }
+    y += 8;
   };
 
-  drawTableHeader();
+  drawComparisonTable(
+    "Service Price Comparison",
+    "See how each invoiced service compares with estimated market pricing.",
+    data.service
+  );
+  drawComparisonTable(
+    "Shipping Label Comparison",
+    "See how each shipping label charge compares with estimated market pricing.",
+    data.shippingLabels
+  );
 
-  for (const line of data.items) {
-    const descLines = doc.splitTextToSize(line.description, descWidth) as string[];
-    const rowHeight = Math.max(8, descLines.length * 4 + 2);
-    ensureSpace(rowHeight + 2);
-    if (y < margin + 10) drawTableHeader();
-
-    doc.setDrawColor(245, 230, 210);
-    doc.line(margin, y + rowHeight - 1, pageWidth - margin, y + rowHeight - 1);
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(40, 35, 30);
-    doc.text(descLines, col.desc + 1, y + 3);
-    doc.text(String(line.quantity), col.qty, y + 3, { align: "right" });
-    doc.text(money(line.compareAmount), col.market, y + 3, { align: "right" });
-    doc.text(money(line.amount), col.yours, y + 3, { align: "right" });
-    doc.setTextColor(line.savedAmount > 0 ? 5 : 100, line.savedAmount > 0 ? 150 : 116, line.savedAmount > 0 ? 105 : 139);
-    doc.setFont("helvetica", "bold");
-    doc.text(money(line.savedAmount), col.save, y + 3, { align: "right" });
-    y += rowHeight;
-  }
-
-  y += 6;
   ensureSpace(28);
   doc.setFillColor(236, 253, 245);
   doc.roundedRect(margin, y, contentWidth, 22, 2, 2, "F");
@@ -355,6 +451,7 @@ export async function buildInvoiceSavingsPdfFile(input: {
   invoiceDate: string;
   clientName?: string;
   items: InvoiceSavingsSourceItem[];
+  shippingLabelItems?: InvoiceSavingsSourceItem[];
 }): Promise<File | null> {
   const data = buildInvoiceSavingsReportData(input);
   if (!data) return null;

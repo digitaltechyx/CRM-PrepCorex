@@ -31,6 +31,10 @@ interface QuoteInvoiceData {
   lateFee?: number;
   total: number;
   terms?: string;
+  invoiceNote?: string;
+  fobPoint?: string;
+  shippingTerms?: string;
+  shippedVia?: string;
 }
 
 function logoFormatForPdf(src: string): "PNG" | "JPEG" {
@@ -70,8 +74,19 @@ export async function generateQuoteInvoicePdfBlob(data: QuoteInvoiceData): Promi
   let y = margin;
 
   const logo = await loadLogo(quotationInvoiceLogoSrc);
-  if (logo) {
-    doc.addImage(logo, logoFormatForPdf(quotationInvoiceLogoSrc), margin, y, 28, 18);
+  let logoHeight = 0;
+  if (logo && logo.naturalWidth > 0 && logo.naturalHeight > 0) {
+    const maxW = 48;
+    const maxH = 14;
+    const ratio = logo.naturalWidth / logo.naturalHeight;
+    let logoW = maxW;
+    let logoH = logoW / ratio;
+    if (logoH > maxH) {
+      logoH = maxH;
+      logoW = logoH * ratio;
+    }
+    doc.addImage(logo, logoFormatForPdf(quotationInvoiceLogoSrc), margin, y, logoW, logoH);
+    logoHeight = logoH;
   }
 
   doc.setFont("helvetica", "bold");
@@ -84,9 +99,9 @@ export async function generateQuoteInvoicePdfBlob(data: QuoteInvoiceData): Promi
   doc.text(`Date: ${data.invoiceDate}`, pageWidth - margin, y + 18, { align: "right" });
   if (data.dueDate) {
     doc.text(`Due Date: ${data.dueDate}`, pageWidth - margin, y + 24, { align: "right" });
-    y += 32;
+    y += Math.max(logoHeight + 6, 32);
   } else {
-    y += 26;
+    y += Math.max(logoHeight + 6, 26);
   }
   doc.setDrawColor(232, 193, 132);
   doc.line(margin, y, pageWidth - margin, y);
@@ -139,23 +154,27 @@ export async function generateQuoteInvoicePdfBlob(data: QuoteInvoiceData): Promi
   }
 
   y += boxHeight + 4;
+  const noteText =
+    (data.invoiceNote || "").trim() ||
+    "Please make all payments to Prep Services FBA LLC. All prices are F.O.B.";
+  const fobPoint = (data.fobPoint || "").trim() || "NEW JERSEY";
+  const shippingTerms = (data.shippingTerms || "").trim() || "NET";
+  const shippedVia = (data.shippedVia || "").trim() || "Standard";
+
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
-  doc.text(
-    "NOTE: Please make all payments to Prep Services FBA LLC. All prices are F.O.B.",
-    margin,
-    y
-  );
-  y += 6;
+  const noteLines = doc.splitTextToSize(`NOTE: ${noteText}`, pageWidth - margin * 2) as string[];
+  doc.text(noteLines, margin, y);
+  y += noteLines.length * 4.5 + 2;
   doc.setFont("helvetica", "normal");
   doc.text("FOB POINT:", margin, y);
-  doc.text("NEW JERSEY", margin + 32, y);
+  doc.text(fobPoint, margin + 32, y);
   y += 4.5;
   doc.text("TERMS:", margin, y);
-  doc.text("NET", margin + 32, y);
+  doc.text(shippingTerms, margin + 32, y);
   y += 4.5;
   doc.text("SHIPPED VIA:", margin, y);
-  doc.text("Standard", margin + 32, y);
+  doc.text(shippedVia, margin + 32, y);
   y += 6;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);

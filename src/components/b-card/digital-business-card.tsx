@@ -77,6 +77,41 @@ function isIosBrowser() {
   return /iPad|iPhone|iPod/i.test(ua) || iPadOs;
 }
 
+function isAndroidBrowser() {
+  if (typeof navigator === "undefined") return false;
+  return /Android/i.test(navigator.userAgent || "");
+}
+
+/**
+ * Android Chrome can open the native New Contact screen via Intent URLs
+ * (vCard navigation only downloads a file on most Androids).
+ */
+function buildAndroidAddContactIntentUrl(): string {
+  const p = B_CARD_PROFILE;
+  const parts = [
+    "action=android.intent.action.INSERT",
+    "type=vnd.android.cursor.dir/contact",
+    `S.name=${encodeURIComponent(p.name)}`,
+    `S.phone=${encodeURIComponent(p.phoneE164)}`,
+    `S.email=${encodeURIComponent(p.email)}`,
+    `S.company=${encodeURIComponent(p.company)}`,
+    `S.job_title=${encodeURIComponent(p.title)}`,
+    `S.notes=${encodeURIComponent(`${p.tagline} · ${p.websiteDisplay}`)}`,
+    `S.postal=${encodeURIComponent(p.location)}`,
+  ];
+  return `intent:#Intent;${parts.join(";")};end`;
+}
+
+function openUrlFromUserGesture(url: string) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 function triggerBlobDownload(blob: Blob, filename: string) {
   const href = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -135,21 +170,32 @@ export function DigitalBusinessCard() {
 
   /**
    * Open the phone's Add Contact screen with details pre-filled.
-   * Uses a real hosted .vcf URL (inline) — blob/download forces "Download file" on many phones.
+   * Android → Contacts INSERT intent (not a .vcf download).
+   * iOS → hosted .vcf (Safari opens Create New Contact).
    */
   const saveOurContact = () => {
     setSavingContact(true);
-    setSheet(null);
     try {
-      const apiUrl = `${window.location.origin}/api/b-card/vcard`;
-
-      if (isMobileBrowser()) {
-        // Same-tab navigation to inline text/vcard opens the phone Add Contact screen.
-        window.location.assign(apiUrl);
+      if (isAndroidBrowser()) {
+        // Keep this inside the same tap gesture — setState first can break Intent launch.
+        openUrlFromUserGesture(buildAndroidAddContactIntentUrl());
+        setSheet(null);
+        toast({
+          title: "Add contact",
+          description: "Review the pre-filled details, then tap Save / Done.",
+        });
         return;
       }
 
-      // Desktop: download is fine
+      if (isIosBrowser() || isMobileBrowser()) {
+        setSheet(null);
+        // Safari opens New Contact from an inline .vcf (not Content-Disposition:attachment).
+        window.location.assign(`${window.location.origin}/b-card/arshad-iqbal.vcf`);
+        return;
+      }
+
+      setSheet(null);
+      const apiUrl = `${window.location.origin}/api/b-card/vcard`;
       const a = document.createElement("a");
       a.href = apiUrl;
       a.download = "Arshad-Iqbal-Prep-Services-FBA.vcf";
@@ -430,20 +476,6 @@ export function DigitalBusinessCard() {
                 onClick={() => setSheet("actions")}
               >
                 Connect
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-11 w-full rounded-2xl border-orange-200 text-[#ff4d12] hover:bg-orange-50"
-                disabled={savingCard}
-                onClick={() => void saveCardImage()}
-              >
-                {savingCard ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <ImageDown className="mr-2 h-4 w-4" />
-                )}
-                Save card
               </Button>
               <button
                 type="button"

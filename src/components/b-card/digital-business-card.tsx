@@ -148,37 +148,8 @@ export function DigitalBusinessCard() {
     window.open(whatsappUrl, "_blank", "noopener,noreferrer");
   };
 
-  const pickContactFromPhone = async () => {
-    const contacts = (navigator as Navigator & {
-      contacts?: {
-        select: (
-          props: string[],
-          opts?: { multiple?: boolean }
-        ) => Promise<Array<Record<string, string[]>>>;
-      };
-    }).contacts;
-
-    if (!contacts?.select) {
-      setSheet("share-form");
-      return;
-    }
-
-    try {
-      const selected = await contacts.select(["name", "email", "tel"], {
-        multiple: false,
-      });
-      const row = selected?.[0];
-      if (!row) return;
-      setLead({
-        name: row.name?.[0] || "",
-        phone: row.tel?.[0] || "",
-        email: row.email?.[0] || "",
-        company: "",
-      });
-      setSheet("share-form");
-    } catch {
-      setSheet("share-form");
-    }
+  const openShareContactForm = () => {
+    setSheet("share-form");
   };
 
   const submitLead = async () => {
@@ -436,7 +407,7 @@ export function DigitalBusinessCard() {
                 <button
                   type="button"
                   className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-slate-50"
-                  onClick={() => void pickContactFromPhone()}
+                  onClick={openShareContactForm}
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white">
                     <Share2 className="h-4 w-4" />
@@ -504,7 +475,7 @@ export function DigitalBusinessCard() {
                     onClick={() => void submitLead()}
                   >
                     {savingLead ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Save to CRM
+                    Share
                   </Button>
                 </div>
               </div>

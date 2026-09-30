@@ -7,6 +7,7 @@ import { ImageDown, Linkedin, Loader2, Plus, Share2, X } from "lucide-react";
 import {
   B_CARD_PROFILE,
   bCardWhatsAppUrl,
+  buildBCardVCard,
 } from "@/lib/b-card-profile";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -82,27 +83,10 @@ function isAndroidBrowser() {
   return /Android/i.test(navigator.userAgent || "");
 }
 
-/**
- * Native Android "New contact" screen (Chrome Intent URL).
- * Must be used as a real <a href> — synthetic .click() is often blocked.
- */
-function buildAndroidAddContactIntentUrl(pkg?: string): string {
-  const p = B_CARD_PROFILE;
-  const extras = [
-    "action=android.intent.action.INSERT",
-    "category=android.intent.category.DEFAULT",
-    "type=vnd.android.cursor.dir/contact",
-    `S.name=${encodeURIComponent(p.name)}`,
-    // Keep + readable for Contacts apps (don't encode the leading +).
-    `S.phone=${encodeURIComponent(p.phoneE164).replace(/%2B/gi, "+")}`,
-    `S.email=${encodeURIComponent(p.email)}`,
-    `S.company=${encodeURIComponent(p.company)}`,
-    `S.job_title=${encodeURIComponent(p.title)}`,
-    `S.notes=${encodeURIComponent(`${p.tagline} · ${p.websiteDisplay}`)}`,
-    `S.postal=${encodeURIComponent(p.location)}`,
-  ];
-  if (pkg) extras.push(`package=${pkg}`);
-  return `intent:#Intent;${extras.join(";")};end`;
+function buildContactVCardFile() {
+  return new File([buildBCardVCard()], "Arshad-Iqbal-Prep-Services-FBA.vcf", {
+    type: "text/vcard",
+  });
 }
 
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -157,7 +141,6 @@ export function DigitalBusinessCard() {
   }, [cardPreviewUrl]);
 
   const whatsappUrl = useMemo(() => bCardWhatsAppUrl(), []);
-  const androidContactHref = useMemo(() => buildAndroidAddContactIntentUrl(), []);
 
   const socialItems = useMemo(
     () => [
@@ -167,10 +150,41 @@ export function DigitalBusinessCard() {
     [whatsappUrl]
   );
 
-  /** iOS / desktop contact save (Android uses a real Intent <a href>). */
-  const saveOurContact = () => {
+  /**
+   * Chrome Android blocks websites from opening New Contact directly.
+   * Sharing a .vcf file lets the user tap Contacts → opens New Contact pre-filled.
+   * iOS Safari can open the .vcf as Create New Contact.
+   */
+  const saveOurContact = async () => {
     setSavingContact(true);
     try {
+      const file = buildContactVCardFile();
+
+      // Android Chrome: only reliable path is share → Contacts (Intent is blocked).
+      if (isAndroidBrowser()) {
+        try {
+          if (navigator.canShare?.({ files: [file] })) {
+            setSheet(null);
+            await navigator.share({
+              files: [file],
+              title: B_CARD_PROFILE.name,
+              text: `${B_CARD_PROFILE.name} · ${B_CARD_PROFILE.company}`,
+            });
+            toast({
+              title: "Choose Contacts",
+              description: "In the share menu tap Contacts (or Save to Contacts), then Done.",
+            });
+            return;
+          }
+        } catch (err: unknown) {
+          if (err instanceof Error && err.name === "AbortError") return;
+        }
+        // Last resort if share files unsupported
+        setSheet(null);
+        window.location.assign(`${window.location.origin}/api/b-card/vcard`);
+        return;
+      }
+
       if (isIosBrowser() || isMobileBrowser()) {
         setSheet(null);
         window.location.assign(`${window.location.origin}/b-card/arshad-iqbal.vcf`);
@@ -178,13 +192,14 @@ export function DigitalBusinessCard() {
       }
 
       setSheet(null);
-      const apiUrl = `${window.location.origin}/api/b-card/vcard`;
+      const href = URL.createObjectURL(file);
       const a = document.createElement("a");
-      a.href = apiUrl;
-      a.download = "Arshad-Iqbal-Prep-Services-FBA.vcf";
+      a.href = href;
+      a.download = file.name;
       document.body.appendChild(a);
       a.click();
       a.remove();
+      URL.revokeObjectURL(href);
       toast({
         title: "Contact file ready",
         description: "Open the .vcf to add Arshad to your contacts.",
@@ -492,7 +507,9 @@ export function DigitalBusinessCard() {
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {sheet === "actions"
-                    ? "Save our contact, save the card image, chat on WhatsApp, or leave your details."
+                    ? isAndroid
+                      ? "Save our contact opens a share menu — tap Contacts to add Arshad."
+                      : "Save our contact, save the card image, chat on WhatsApp, or leave your details."
                     : "We’ll save this in the Prep Services CRM address book."}
                 </p>
               </div>
@@ -507,34 +524,21 @@ export function DigitalBusinessCard() {
 
             {sheet === "actions" ? (
               <div className="mt-2 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-100">
-                {isAndroid ? (
-                  <a
-                    href={androidContactHref}
-                    className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50"
-                    onClick={() => setSheet(null)}
-                  >
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"
+                  disabled={savingContact}
+                  onClick={() => void saveOurContact()}
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
+                    {savingContact ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
                       <Plus className="h-5 w-5" />
-                    </span>
-                    Save our contact
-                  </a>
-                ) : (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"
-                    disabled={savingContact}
-                    onClick={saveOurContact}
-                  >
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
-                      {savingContact ? (
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      ) : (
-                        <Plus className="h-5 w-5" />
-                      )}
-                    </span>
-                    Save our contact
-                  </button>
-                )}
+                    )}
+                  </span>
+                  Save our contact
+                </button>
                 <button
                   type="button"
                   className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"

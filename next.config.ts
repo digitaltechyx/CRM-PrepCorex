@@ -17,6 +17,20 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "prepservicesfba.com", pathname: "/**" },
     ],
   },
+  async headers() {
+    return [
+      {
+        source: "/b-card/:path*.vcf",
+        headers: [
+          { key: "Content-Type", value: "text/vcard; charset=utf-8" },
+          {
+            key: "Content-Disposition",
+            value: 'inline; filename="Arshad-Iqbal-Prep-Services-FBA.vcf"',
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

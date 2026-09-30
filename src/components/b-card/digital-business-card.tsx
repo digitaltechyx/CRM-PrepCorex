@@ -7,7 +7,6 @@ import { ImageDown, Linkedin, Loader2, Plus, Share2, X } from "lucide-react";
 import {
   B_CARD_PROFILE,
   bCardWhatsAppUrl,
-  buildBCardVCard,
 } from "@/lib/b-card-profile";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -71,13 +70,23 @@ function isMobileBrowser() {
   return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || iPadOs;
 }
 
-function buildVCardFile() {
-  const blob = new Blob([buildBCardVCard()], {
-    type: "text/vcard;charset=utf-8",
-  });
-  return new File([blob], "Arshad-Iqbal-Prep-Services-FBA.vcf", {
-    type: "text/vcard",
-  });
+function isIosBrowser() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const iPadOs = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  return /iPad|iPhone|iPod/i.test(ua) || iPadOs;
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(href), 30_000);
 }
 
 export function DigitalBusinessCard() {
@@ -89,6 +98,7 @@ export function DigitalBusinessCard() {
   const [savingLead, setSavingLead] = useState(false);
   const [savingCard, setSavingCard] = useState(false);
   const [savingContact, setSavingContact] = useState(false);
+  const [cardPreviewUrl, setCardPreviewUrl] = useState<string | null>(null);
   const [lead, setLead] = useState({
     name: "",
     phone: "",
@@ -107,6 +117,12 @@ export function DigitalBusinessCard() {
     }).then(setQrDataUrl);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (cardPreviewUrl) URL.revokeObjectURL(cardPreviewUrl);
+    };
+  }, [cardPreviewUrl]);
+
   const whatsappUrl = useMemo(() => bCardWhatsAppUrl(), []);
 
   const socialItems = useMemo(
@@ -117,69 +133,45 @@ export function DigitalBusinessCard() {
     [whatsappUrl]
   );
 
-  /** Prefer native share / OS contact UI; fall back to download only on desktop. */
-  const saveOurContact = async () => {
+  /**
+   * Open the phone's Add Contact screen with details pre-filled.
+   * Uses a real hosted .vcf URL (inline) — blob/download forces "Download file" on many phones.
+   */
+  const saveOurContact = () => {
     setSavingContact(true);
+    setSheet(null);
     try {
-      const file = buildVCardFile();
-
-      try {
-        if (navigator.canShare?.({ files: [file] })) {
-          await navigator.share({
-            files: [file],
-            title: B_CARD_PROFILE.name,
-            text: `${B_CARD_PROFILE.name} · ${B_CARD_PROFILE.title} · ${B_CARD_PROFILE.company}`,
-          });
-          toast({
-            title: "Add to contacts",
-            description: "Choose Contacts (or Save Contact), then tap Save.",
-          });
-          setSheet(null);
-          return;
-        }
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === "AbortError") return;
-      }
+      const apiUrl = `${window.location.origin}/api/b-card/vcard`;
 
       if (isMobileBrowser()) {
-        const url = URL.createObjectURL(file);
-        // Opening the vCard lets iOS/Android show the Add Contact screen with fields filled.
-        const opened = window.open(url, "_blank");
-        if (!opened) {
-          window.location.assign(url);
-        }
-        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-        toast({
-          title: "Add contact",
-          description: "Review the pre-filled details, then tap Save.",
-        });
-        setSheet(null);
+        // Same-tab navigation to inline text/vcard opens the phone Add Contact screen.
+        window.location.assign(apiUrl);
         return;
       }
 
-      const href = URL.createObjectURL(file);
+      // Desktop: download is fine
       const a = document.createElement("a");
-      a.href = href;
-      a.download = file.name;
+      a.href = apiUrl;
+      a.download = "Arshad-Iqbal-Prep-Services-FBA.vcf";
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(href);
+      a.remove();
       toast({
         title: "Contact file ready",
         description: "Open the .vcf to add Arshad to your contacts.",
       });
-      setSheet(null);
     } finally {
       setSavingContact(false);
     }
   };
 
+  /** Capture card PNG and prompt gallery save — never opens the share sheet. */
   const saveCardImage = async () => {
     if (!cardRef.current || savingCard) return;
     setSavingCard(true);
     const previousSheet = sheet;
     setSheet(null);
-    // Let the sheet close before capture so the card is fully visible.
-    await new Promise((r) => window.setTimeout(r, 120));
+    await new Promise((r) => window.setTimeout(r, 160));
 
     try {
       const canvas = await html2canvas(cardRef.current, {
@@ -188,42 +180,26 @@ export function DigitalBusinessCard() {
         allowTaint: false,
         backgroundColor: "#ffffff",
         logging: false,
+        ignoreElements: (el) =>
+          el instanceof HTMLElement && el.hasAttribute("data-html2canvas-ignore"),
       });
       const blob = await new Promise<Blob | null>((resolve) =>
         canvas.toBlob((b) => resolve(b), "image/png")
       );
       if (!blob) throw new Error("Could not create card image.");
 
-      const file = new File([blob], "Arshad-Iqbal-PrepCorex-card.png", {
-        type: "image/png",
-      });
+      if (cardPreviewUrl) URL.revokeObjectURL(cardPreviewUrl);
+      const previewUrl = URL.createObjectURL(blob);
+      setCardPreviewUrl(previewUrl);
 
-      try {
-        if (navigator.canShare?.({ files: [file] })) {
-          await navigator.share({
-            files: [file],
-            title: `${B_CARD_PROFILE.name} digital card`,
-            text: `${B_CARD_PROFILE.company} — ${B_CARD_PROFILE.tagline}`,
-          });
-          toast({
-            title: "Save to gallery",
-            description: "Choose Save Image / Photos to keep the card.",
-          });
-          return;
-        }
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === "AbortError") return;
-      }
+      // Direct download → phone Downloads / Gallery (Android). iOS uses long-press on preview.
+      triggerBlobDownload(blob, "Arshad-Iqbal-PrepCorex-card.png");
 
-      const href = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = href;
-      a.download = file.name;
-      a.click();
-      URL.revokeObjectURL(href);
       toast({
-        title: "Card image ready",
-        description: "Saved to downloads — open it to keep in your gallery.",
+        title: isIosBrowser() ? "Long-press to save" : "Card downloading",
+        description: isIosBrowser()
+          ? "Long-press the card image → Save to Photos."
+          : "Check Downloads / Gallery for the card image.",
       });
     } catch (err: unknown) {
       setSheet(previousSheet);
@@ -444,7 +420,10 @@ export function DigitalBusinessCard() {
           </div>
 
           {!sheet ? (
-            <div className="space-y-2 border-t border-slate-100 px-5 py-4">
+            <div
+              data-html2canvas-ignore
+              className="space-y-2 border-t border-slate-100 px-5 py-4"
+            >
               <Button
                 type="button"
                 className="h-12 w-full rounded-2xl bg-[#ff4d12] text-base font-semibold hover:bg-[#e03d00]"
@@ -517,7 +496,7 @@ export function DigitalBusinessCard() {
                   type="button"
                   className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"
                   disabled={savingContact}
-                  onClick={() => void saveOurContact()}
+                  onClick={saveOurContact}
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
                     {savingContact ? (
@@ -632,6 +611,73 @@ export function DigitalBusinessCard() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {cardPreviewUrl ? (
+        <div className="fixed inset-0 z-[60] flex flex-col bg-black/90 px-3 py-4">
+          <div className="mb-3 flex items-center justify-between gap-2 text-white">
+            <div>
+              <p className="text-base font-semibold">Save card to gallery</p>
+              <p className="text-xs text-white/70">
+                {isIosBrowser()
+                  ? "Long-press the image → Save to Photos"
+                  : "Image is downloading — also long-press to Save image"}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="rounded-full bg-white/10 p-2 hover:bg-white/20"
+              onClick={() => {
+                URL.revokeObjectURL(cardPreviewUrl);
+                setCardPreviewUrl(null);
+              }}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <div className="flex flex-1 items-center justify-center overflow-auto">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={cardPreviewUrl}
+              alt="Digital business card"
+              className="max-h-full w-full max-w-md rounded-2xl object-contain shadow-2xl"
+            />
+          </div>
+          <div className="mx-auto mt-3 w-full max-w-md space-y-2">
+            <Button
+              type="button"
+              className="h-12 w-full rounded-2xl bg-[#ff4d12] hover:bg-[#e03d00]"
+              onClick={() => {
+                const a = document.createElement("a");
+                a.href = cardPreviewUrl;
+                a.download = "Arshad-Iqbal-PrepCorex-card.png";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                toast({
+                  title: "Download started",
+                  description: isIosBrowser()
+                    ? "If Photos didn’t open, long-press the image above."
+                    : "Check your Downloads or Gallery folder.",
+                });
+              }}
+            >
+              <ImageDown className="mr-2 h-4 w-4" />
+              Download card image
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full rounded-2xl border-white/30 bg-transparent text-white hover:bg-white/10"
+              onClick={() => {
+                URL.revokeObjectURL(cardPreviewUrl);
+                setCardPreviewUrl(null);
+              }}
+            >
+              Done
+            </Button>
           </div>
         </div>
       ) : null}

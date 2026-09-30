@@ -216,14 +216,14 @@ export function DigitalBusinessCard() {
             </svg>
 
             <div className="relative flex items-start justify-between gap-3">
-              <div className="flex max-w-[54%] items-center overflow-hidden rounded-2xl bg-black px-[2px] py-[1px] shadow-sm ring-1 ring-white/25">
+              <div className="flex max-w-[54%] items-center overflow-hidden rounded-2xl border border-white bg-black px-[2px] py-[1px] shadow-sm">
                 <img
                   src={B_CARD_PROFILE.prepcorexLogoSrc}
                   alt="PrepCorex"
                   className="h-12 w-auto max-w-full object-contain object-center"
                 />
               </div>
-              <div className="flex max-w-[42%] items-center overflow-hidden rounded-2xl bg-black px-[2px] py-[1px] shadow-sm ring-1 ring-white/25">
+              <div className="flex max-w-[42%] items-center overflow-hidden rounded-2xl border border-white bg-black px-[2px] py-[1px] shadow-sm">
                 <img
                   src={B_CARD_PROFILE.companyLogoSrc}
                   alt="Prep Services FBA"

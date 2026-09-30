@@ -83,33 +83,26 @@ function isAndroidBrowser() {
 }
 
 /**
- * Android Chrome can open the native New Contact screen via Intent URLs
- * (vCard navigation only downloads a file on most Androids).
+ * Native Android "New contact" screen (Chrome Intent URL).
+ * Must be used as a real <a href> — synthetic .click() is often blocked.
  */
-function buildAndroidAddContactIntentUrl(): string {
+function buildAndroidAddContactIntentUrl(pkg?: string): string {
   const p = B_CARD_PROFILE;
-  const parts = [
+  const extras = [
     "action=android.intent.action.INSERT",
+    "category=android.intent.category.DEFAULT",
     "type=vnd.android.cursor.dir/contact",
     `S.name=${encodeURIComponent(p.name)}`,
-    `S.phone=${encodeURIComponent(p.phoneE164)}`,
+    // Keep + readable for Contacts apps (don't encode the leading +).
+    `S.phone=${encodeURIComponent(p.phoneE164).replace(/%2B/gi, "+")}`,
     `S.email=${encodeURIComponent(p.email)}`,
     `S.company=${encodeURIComponent(p.company)}`,
     `S.job_title=${encodeURIComponent(p.title)}`,
     `S.notes=${encodeURIComponent(`${p.tagline} · ${p.websiteDisplay}`)}`,
     `S.postal=${encodeURIComponent(p.location)}`,
   ];
-  return `intent:#Intent;${parts.join(";")};end`;
-}
-
-function openUrlFromUserGesture(url: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  a.rel = "noopener";
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  if (pkg) extras.push(`package=${pkg}`);
+  return `intent:#Intent;${extras.join(";")};end`;
 }
 
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -134,12 +127,17 @@ export function DigitalBusinessCard() {
   const [savingCard, setSavingCard] = useState(false);
   const [savingContact, setSavingContact] = useState(false);
   const [cardPreviewUrl, setCardPreviewUrl] = useState<string | null>(null);
+  const [isAndroid, setIsAndroid] = useState(false);
   const [lead, setLead] = useState({
     name: "",
     phone: "",
     email: "",
     company: "",
   });
+
+  useEffect(() => {
+    setIsAndroid(isAndroidBrowser());
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -159,6 +157,7 @@ export function DigitalBusinessCard() {
   }, [cardPreviewUrl]);
 
   const whatsappUrl = useMemo(() => bCardWhatsAppUrl(), []);
+  const androidContactHref = useMemo(() => buildAndroidAddContactIntentUrl(), []);
 
   const socialItems = useMemo(
     () => [
@@ -168,28 +167,12 @@ export function DigitalBusinessCard() {
     [whatsappUrl]
   );
 
-  /**
-   * Open the phone's Add Contact screen with details pre-filled.
-   * Android → Contacts INSERT intent (not a .vcf download).
-   * iOS → hosted .vcf (Safari opens Create New Contact).
-   */
+  /** iOS / desktop contact save (Android uses a real Intent <a href>). */
   const saveOurContact = () => {
     setSavingContact(true);
     try {
-      if (isAndroidBrowser()) {
-        // Keep this inside the same tap gesture — setState first can break Intent launch.
-        openUrlFromUserGesture(buildAndroidAddContactIntentUrl());
-        setSheet(null);
-        toast({
-          title: "Add contact",
-          description: "Review the pre-filled details, then tap Save / Done.",
-        });
-        return;
-      }
-
       if (isIosBrowser() || isMobileBrowser()) {
         setSheet(null);
-        // Safari opens New Contact from an inline .vcf (not Content-Disposition:attachment).
         window.location.assign(`${window.location.origin}/b-card/arshad-iqbal.vcf`);
         return;
       }
@@ -524,21 +507,34 @@ export function DigitalBusinessCard() {
 
             {sheet === "actions" ? (
               <div className="mt-2 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-100">
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"
-                  disabled={savingContact}
-                  onClick={saveOurContact}
-                >
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
-                    {savingContact ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : (
+                {isAndroid ? (
+                  <a
+                    href={androidContactHref}
+                    className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50"
+                    onClick={() => setSheet(null)}
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
                       <Plus className="h-5 w-5" />
-                    )}
-                  </span>
-                  Save our contact
-                </button>
+                    </span>
+                    Save our contact
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"
+                    disabled={savingContact}
+                    onClick={saveOurContact}
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
+                      {savingContact ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <Plus className="h-5 w-5" />
+                      )}
+                    </span>
+                    Save our contact
+                  </button>
+                )}
                 <button
                   type="button"
                   className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"

@@ -13,7 +13,7 @@ export const B_CARD_PROFILE = {
   websiteDisplay: "www.prepservicesfba.com",
   photoSrc: "/b-card/arshad-iqbal.jpg",
   prepcorexLogoSrc: "/b-card/prepcorex-logo.png",
-  companyLogoSrc: "/b-card/prep-services-logo.webp",
+  companyLogoSrc: "/b-card/prep-services-logo.png",
   socials: [
     {
       id: "linkedin",

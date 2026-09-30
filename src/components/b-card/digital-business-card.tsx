@@ -223,11 +223,11 @@ export function DigitalBusinessCard() {
                   className="h-9 w-auto max-w-full object-contain"
                 />
               </div>
-              <div className="flex max-w-[40%] items-center rounded-2xl bg-white px-2.5 py-2 shadow-sm">
+              <div className="flex max-w-[42%] items-center overflow-hidden rounded-2xl bg-black shadow-sm ring-1 ring-white/25">
                 <img
                   src={B_CARD_PROFILE.companyLogoSrc}
                   alt="Prep Services FBA"
-                  className="h-11 w-auto max-w-full object-contain"
+                  className="h-12 w-auto max-w-full object-contain object-center"
                 />
               </div>
             </div>

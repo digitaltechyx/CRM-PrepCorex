@@ -2,18 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import {
-  Download,
-  Linkedin,
-  Loader2,
-  Mail,
-  MapPin,
-  MessageCircle,
-  Phone,
-  Share2,
-  UserPlus,
-  X,
-} from "lucide-react";
+import { Linkedin, Loader2, Plus, Share2, X } from "lucide-react";
 import {
   B_CARD_PROFILE,
   bCardWhatsAppUrl,
@@ -50,10 +39,27 @@ function TikTokIcon({ className }: { className?: string }) {
   );
 }
 
+function WhatsAppGlyph({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893A11.821 11.821 0 0020.893 3.488" />
+    </svg>
+  );
+}
+
+const SOCIAL_STYLES: Record<string, string> = {
+  linkedin: "bg-[#0A66C2] text-white",
+  facebook: "bg-[#1877F2] text-white",
+  instagram: "bg-gradient-to-br from-[#f58529] via-[#dd2a7b] to-[#8134af] text-white",
+  tiktok: "bg-black text-white",
+  whatsapp: "bg-[#25D366] text-white",
+};
+
 function socialIcon(id: string) {
   if (id === "linkedin") return Linkedin;
   if (id === "facebook") return FacebookIcon;
   if (id === "instagram") return InstagramIcon;
+  if (id === "whatsapp") return WhatsAppGlyph;
   return TikTokIcon;
 }
 
@@ -75,13 +81,21 @@ export function DigitalBusinessCard() {
     const url = `${window.location.origin}/b-card`;
     setCardUrl(url);
     void QRCode.toDataURL(url, {
-      width: 280,
+      width: 220,
       margin: 1,
       color: { dark: "#1a1208", light: "#ffffff" },
     }).then(setQrDataUrl);
   }, []);
 
   const whatsappUrl = useMemo(() => bCardWhatsAppUrl(), []);
+
+  const socialItems = useMemo(
+    () => [
+      ...B_CARD_PROFILE.socials,
+      { id: "whatsapp" as const, label: "WhatsApp", href: whatsappUrl },
+    ],
+    [whatsappUrl]
+  );
 
   const downloadVCard = () => {
     const blob = new Blob([buildBCardVCard()], {
@@ -195,47 +209,70 @@ export function DigitalBusinessCard() {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-[#f4f1ec] text-slate-900">
-      <div className="mx-auto flex min-h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-white shadow-2xl shadow-orange-900/10">
-        {/* Orange header */}
-        <header className="relative overflow-hidden bg-gradient-to-br from-[#ff6a1a] via-[#ff4d12] to-[#e03d00] px-5 pb-8 pt-6 text-white">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/15 blur-2xl"
-          />
-          <div className="relative flex items-center justify-between gap-3">
-            <div className="flex h-14 max-w-[48%] items-center rounded-xl bg-black/25 px-2.5 py-1.5 ring-1 ring-white/20">
-              <img
-                src={B_CARD_PROFILE.companyLogoSrc}
-                alt="Prep Services FBA"
-                className="h-10 w-auto max-w-full object-contain"
+    <div className="relative min-h-[100dvh] overflow-hidden bg-[#1a120c]">
+      {/* Soft event / warehouse atmosphere behind the card */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_#3a2418_0%,_#1a120c_55%,_#0d0a08_100%)]"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -left-20 top-24 h-64 w-64 rounded-full bg-orange-500/20 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-16 bottom-32 h-72 w-72 rounded-full bg-orange-600/15 blur-3xl"
+      />
+
+      <div className="relative mx-auto flex min-h-[100dvh] w-full max-w-md items-center justify-center px-3 py-6">
+        <article className="relative w-full overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_-20px_rgba(0,0,0,0.55)]">
+          {/* Orange wave header */}
+          <header className="relative overflow-hidden px-5 pb-16 pt-5 text-white">
+            <div
+              aria-hidden
+              className="absolute inset-0 bg-gradient-to-br from-[#ff7a2f] via-[#ff4d12] to-[#e03d00]"
+            />
+            <svg
+              aria-hidden
+              className="absolute bottom-0 left-0 w-full"
+              viewBox="0 0 400 48"
+              preserveAspectRatio="none"
+            >
+              <path
+                d="M0 24 C80 48 140 0 220 22 C300 44 340 8 400 28 L400 48 L0 48 Z"
+                fill="white"
               />
-            </div>
-            <div className="flex h-14 max-w-[48%] items-center rounded-xl bg-white px-2.5 py-1.5 shadow-sm">
+            </svg>
+
+            <div className="relative flex items-start justify-between gap-3">
               <img
                 src={B_CARD_PROFILE.prepcorexLogoSrc}
                 alt="PrepCorex"
-                className="h-9 w-auto max-w-full object-contain"
+                className="h-11 w-auto max-w-[58%] object-contain drop-shadow-sm"
+              />
+              <img
+                src={B_CARD_PROFILE.companyLogoSrc}
+                alt="Prep Services FBA"
+                className="h-12 w-auto max-w-[38%] object-contain drop-shadow-sm"
               />
             </div>
-          </div>
-          <p className="relative mt-4 text-center font-[family-name:var(--font-instrument),Georgia,serif] text-[15px] italic leading-snug text-white/95">
-            {B_CARD_PROFILE.tagline}
-          </p>
-        </header>
 
-        {/* Profile */}
-        <section className="-mt-2 flex flex-1 flex-col px-5 pb-28 pt-2">
-          <div className="flex flex-col items-center text-center">
-            <div className="relative -mt-10 mb-3">
-              <div className="absolute inset-0 rounded-full bg-orange-500/30 blur-md" />
+            <p className="relative mt-5 text-center font-[Georgia,serif] text-[15px] italic leading-snug text-white/95">
+              {B_CARD_PROFILE.tagline}
+            </p>
+          </header>
+
+          {/* Profile */}
+          <div className="-mt-10 flex flex-col items-center px-5 text-center">
+            <div className="relative mb-3">
+              <div className="absolute -inset-1 rounded-full bg-gradient-to-br from-[#ff7a2f] to-[#e03d00] opacity-90" />
               <img
                 src={B_CARD_PROFILE.photoSrc}
                 alt={B_CARD_PROFILE.name}
-                className="relative h-28 w-28 rounded-full object-cover object-top ring-4 ring-white shadow-xl"
+                className="relative h-[7.25rem] w-[7.25rem] rounded-full object-cover object-top ring-[3px] ring-white"
               />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+            <h1 className="text-[1.65rem] font-bold tracking-tight text-slate-900">
               {B_CARD_PROFILE.name}
             </h1>
             <p className="mt-1 text-sm font-semibold text-[#ff4d12]">
@@ -244,138 +281,114 @@ export function DigitalBusinessCard() {
             <p className="mt-0.5 text-xs font-medium text-slate-500">
               {B_CARD_PROFILE.company}
             </p>
-          </div>
 
-          <div className="mt-5 space-y-2.5 rounded-2xl border border-orange-100 bg-orange-50/50 p-3.5 text-sm">
-            <a
-              href={`tel:${B_CARD_PROFILE.phoneE164}`}
-              className="flex items-center gap-2.5 font-medium text-slate-800"
-            >
-              <Phone className="h-4 w-4 text-[#ff4d12]" />
-              {B_CARD_PROFILE.phoneDisplay}
-            </a>
-            <a
-              href={`mailto:${B_CARD_PROFILE.email}`}
-              className="flex items-center gap-2.5 font-medium text-slate-800 break-all"
-            >
-              <Mail className="h-4 w-4 shrink-0 text-[#ff4d12]" />
-              {B_CARD_PROFILE.email}
-            </a>
-            <div className="flex items-center gap-2.5 font-medium text-slate-800">
-              <MapPin className="h-4 w-4 text-[#ff4d12]" />
-              {B_CARD_PROFILE.location}
+            <div className="mt-4 flex w-full items-center gap-3">
+              <div className="h-px flex-1 bg-slate-200" />
+              <p className="whitespace-nowrap text-[11px] font-semibold tracking-wide text-slate-700">
+                Live Cam · Fulfillment · WMS
+              </p>
+              <div className="h-px flex-1 bg-slate-200" />
             </div>
-            <a
-              href={B_CARD_PROFILE.website}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2.5 font-medium text-[#ff4d12]"
-            >
-              {B_CARD_PROFILE.websiteDisplay}
-            </a>
           </div>
 
-          {/* Socials */}
-          <div className="mt-5">
-            <p className="mb-2 text-center text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">
-              Connect
-            </p>
-            <div className="grid grid-cols-4 gap-2">
-              {B_CARD_PROFILE.socials.map((social) => {
+          {/* Socials + QR (side by side like selected mockup) */}
+          <div className="mt-5 flex items-center justify-between gap-3 px-5 pb-6">
+            <div className="flex flex-1 flex-wrap items-center gap-2.5">
+              {socialItems.map((social) => {
                 const Icon = socialIcon(social.id);
+                const style = SOCIAL_STYLES[social.id] || "bg-slate-800 text-white";
                 return (
                   <a
                     key={social.id}
                     href={social.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex flex-col items-center gap-1.5 rounded-xl border border-slate-100 bg-white px-2 py-3 shadow-sm transition hover:border-orange-200 hover:shadow-md"
+                    title={social.label}
+                    className={`flex h-11 w-11 items-center justify-center rounded-full shadow-sm transition hover:scale-105 ${style}`}
                   >
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#ff4d12] text-white">
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    <span className="text-[10px] font-semibold text-slate-600">
-                      {social.label}
-                    </span>
+                    <Icon className="h-[1.15rem] w-[1.15rem]" />
                   </a>
                 );
               })}
             </div>
+
+            <div className="shrink-0 rounded-xl border border-slate-100 bg-slate-50 p-1.5 shadow-sm">
+              {qrDataUrl ? (
+                <img
+                  src={qrDataUrl}
+                  alt="QR code for this digital card"
+                  className="h-[5.5rem] w-[5.5rem] rounded-lg bg-white"
+                />
+              ) : (
+                <div className="flex h-[5.5rem] w-[5.5rem] items-center justify-center rounded-lg bg-white">
+                  <Loader2 className="h-5 w-5 animate-spin text-orange-500" />
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* QR — card link */}
-          <div className="mt-6 flex flex-col items-center rounded-2xl border border-slate-100 bg-slate-50 px-4 py-4">
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-400">
-              Scan digital card
-            </p>
-            {qrDataUrl ? (
-              <img
-                src={qrDataUrl}
-                alt="QR code linking to this digital business card"
-                className="h-36 w-36 rounded-xl bg-white p-2 shadow-sm"
-              />
-            ) : (
-              <div className="flex h-36 w-36 items-center justify-center rounded-xl bg-white">
-                <Loader2 className="h-6 w-6 animate-spin text-orange-500" />
-              </div>
-            )}
-            <p className="mt-2 max-w-[240px] text-center text-[11px] text-slate-500">
-              QR opens this card — not WhatsApp. Use the buttons below for WhatsApp or save
-              contact.
-            </p>
+          {/* Compact contact taps */}
+          <div className="space-y-1 border-t border-slate-100 px-5 py-3 text-center text-xs text-slate-500">
+            <a href={`tel:${B_CARD_PROFILE.phoneE164}`} className="block font-medium text-slate-700">
+              {B_CARD_PROFILE.phoneDisplay}
+            </a>
+            <a href={`mailto:${B_CARD_PROFILE.email}`} className="block break-all">
+              {B_CARD_PROFILE.email}
+            </a>
+            <a
+              href={B_CARD_PROFILE.website}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block font-semibold text-[#ff4d12]"
+            >
+              {B_CARD_PROFILE.websiteDisplay}
+            </a>
           </div>
-        </section>
 
-        {/* Sticky actions */}
-        <div className="fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md border-t border-orange-100 bg-white/95 px-4 py-3 backdrop-blur">
-          <div className="grid grid-cols-3 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 border-orange-200 text-slate-800"
-              onClick={() => void shareCard()}
-            >
-              <Share2 className="mr-1.5 h-4 w-4 text-[#ff4d12]" />
-              Share
-            </Button>
-            <Button
-              type="button"
-              className="h-11 bg-[#25D366] hover:bg-[#20bd5a]"
-              onClick={openWhatsApp}
-            >
-              <MessageCircle className="mr-1.5 h-4 w-4" />
-              WhatsApp
-            </Button>
-            <Button
-              type="button"
-              className="h-11 bg-[#ff4d12] hover:bg-[#e03d00]"
-              onClick={() => setSheet("actions")}
-            >
-              <UserPlus className="mr-1.5 h-4 w-4" />
-              Connect
-            </Button>
-          </div>
-        </div>
+          {/* Re-open actions when sheet closed */}
+          {!sheet ? (
+            <div className="border-t border-slate-100 px-5 py-4">
+              <Button
+                type="button"
+                className="h-12 w-full rounded-2xl bg-[#ff4d12] text-base font-semibold hover:bg-[#e03d00]"
+                onClick={() => setSheet("actions")}
+              >
+                Connect
+              </Button>
+              <button
+                type="button"
+                className="mt-2 w-full text-center text-xs font-semibold text-slate-500"
+                onClick={() => void shareCard()}
+              >
+                Share card link
+              </button>
+            </div>
+          ) : (
+            <div className="h-4" />
+          )}
+        </article>
       </div>
 
-      {/* Action sheet */}
+      {/* Bottom sheet — matches selected mockup */}
       {sheet ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 sm:items-center sm:p-4">
           <button
             type="button"
             className="absolute inset-0 cursor-default"
             aria-label="Close"
             onClick={() => setSheet(null)}
           />
-          <div className="relative z-10 w-full max-w-md rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl">
-            <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="relative z-10 w-full max-w-md rounded-t-[28px] bg-white px-5 pb-7 pt-3 shadow-2xl sm:rounded-[28px]">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-slate-200" />
+
+            <div className="mb-1 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">
                   {sheet === "actions" ? "How would you like to connect?" : "Share your contact"}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {sheet === "actions"
-                    ? "Save our card, chat on WhatsApp, or leave your details for our CRM."
+                    ? "Save our card, chat on WhatsApp, or leave your details."
                     : "We’ll save this in the Prep Services CRM address book."}
                 </p>
               </div>
@@ -389,41 +402,46 @@ export function DigitalBusinessCard() {
             </div>
 
             {sheet === "actions" ? (
-              <div className="space-y-2.5">
-                <Button
+              <div className="mt-2 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-100">
+                <button
                   type="button"
-                  className="h-12 w-full justify-start bg-[#ff4d12] hover:bg-[#e03d00]"
+                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50"
                   onClick={() => {
                     downloadVCard();
                     setSheet(null);
                   }}
                 >
-                  <Download className="mr-2 h-4 w-4" />
-                  1) Save our contact
-                </Button>
-                <Button
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
+                    <Plus className="h-5 w-5" />
+                  </span>
+                  Save our contact
+                </button>
+                <button
                   type="button"
-                  className="h-12 w-full justify-start bg-[#25D366] hover:bg-[#20bd5a]"
+                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-green-50"
                   onClick={() => {
                     openWhatsApp();
                     setSheet(null);
                   }}
                 >
-                  <MessageCircle className="mr-2 h-4 w-4" />
-                  2) Open WhatsApp
-                </Button>
-                <Button
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#25D366] text-white">
+                    <WhatsAppGlyph className="h-5 w-5" />
+                  </span>
+                  Open WhatsApp
+                </button>
+                <button
                   type="button"
-                  variant="outline"
-                  className="h-12 w-full justify-start border-orange-200"
+                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-slate-50"
                   onClick={() => void pickContactFromPhone()}
                 >
-                  <UserPlus className="mr-2 h-4 w-4 text-[#ff4d12]" />
-                  3) Share your contact
-                </Button>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white">
+                    <Share2 className="h-4 w-4" />
+                  </span>
+                  Share your contact
+                </button>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="mt-3 space-y-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="lead-name">Name *</Label>
                   <Input

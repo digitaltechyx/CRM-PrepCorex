@@ -385,7 +385,7 @@ export function DigitalBusinessCard() {
             <div className="mt-4 flex w-full items-center gap-3">
               <div className="h-px flex-1 bg-slate-200" />
               <p className="whitespace-nowrap text-[11px] font-semibold tracking-wide text-slate-700">
-                Live Cam · Fulfillment · WMS
+                New Jersey, USA
               </p>
               <div className="h-px flex-1 bg-slate-200" />
             </div>

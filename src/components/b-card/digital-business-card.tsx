@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { Linkedin, Loader2, Plus, Share2, X } from "lucide-react";
+import html2canvas from "html2canvas";
+import { ImageDown, Linkedin, Loader2, Plus, Share2, X } from "lucide-react";
 import {
   B_CARD_PROFILE,
   bCardWhatsAppUrl,
@@ -63,12 +64,31 @@ function socialIcon(id: string) {
   return TikTokIcon;
 }
 
+function isMobileBrowser() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const iPadOs = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || iPadOs;
+}
+
+function buildVCardFile() {
+  const blob = new Blob([buildBCardVCard()], {
+    type: "text/vcard;charset=utf-8",
+  });
+  return new File([blob], "Arshad-Iqbal-Prep-Services-FBA.vcf", {
+    type: "text/vcard",
+  });
+}
+
 export function DigitalBusinessCard() {
   const { toast } = useToast();
+  const cardRef = useRef<HTMLElement | null>(null);
   const [cardUrl, setCardUrl] = useState("https://crm.prepservicesfba.com/b-card");
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [sheet, setSheet] = useState<SheetMode>("actions");
   const [savingLead, setSavingLead] = useState(false);
+  const [savingCard, setSavingCard] = useState(false);
+  const [savingContact, setSavingContact] = useState(false);
   const [lead, setLead] = useState({
     name: "",
     phone: "",
@@ -97,20 +117,124 @@ export function DigitalBusinessCard() {
     [whatsappUrl]
   );
 
-  const downloadVCard = () => {
-    const blob = new Blob([buildBCardVCard()], {
-      type: "text/vcard;charset=utf-8",
-    });
-    const href = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = "Arshad-Iqbal-Prep-Services-FBA.vcf";
-    a.click();
-    URL.revokeObjectURL(href);
-    toast({
-      title: "Contact ready",
-      description: "Save Arshad Iqbal to your phone contacts.",
-    });
+  /** Prefer native share / OS contact UI; fall back to download only on desktop. */
+  const saveOurContact = async () => {
+    setSavingContact(true);
+    try {
+      const file = buildVCardFile();
+
+      try {
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: B_CARD_PROFILE.name,
+            text: `${B_CARD_PROFILE.name} · ${B_CARD_PROFILE.title} · ${B_CARD_PROFILE.company}`,
+          });
+          toast({
+            title: "Add to contacts",
+            description: "Choose Contacts (or Save Contact), then tap Save.",
+          });
+          setSheet(null);
+          return;
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") return;
+      }
+
+      if (isMobileBrowser()) {
+        const url = URL.createObjectURL(file);
+        // Opening the vCard lets iOS/Android show the Add Contact screen with fields filled.
+        const opened = window.open(url, "_blank");
+        if (!opened) {
+          window.location.assign(url);
+        }
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        toast({
+          title: "Add contact",
+          description: "Review the pre-filled details, then tap Save.",
+        });
+        setSheet(null);
+        return;
+      }
+
+      const href = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(href);
+      toast({
+        title: "Contact file ready",
+        description: "Open the .vcf to add Arshad to your contacts.",
+      });
+      setSheet(null);
+    } finally {
+      setSavingContact(false);
+    }
+  };
+
+  const saveCardImage = async () => {
+    if (!cardRef.current || savingCard) return;
+    setSavingCard(true);
+    const previousSheet = sheet;
+    setSheet(null);
+    // Let the sheet close before capture so the card is fully visible.
+    await new Promise((r) => window.setTimeout(r, 120));
+
+    try {
+      const canvas = await html2canvas(cardRef.current, {
+        scale: Math.min(3, window.devicePixelRatio || 2),
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: "#ffffff",
+        logging: false,
+      });
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), "image/png")
+      );
+      if (!blob) throw new Error("Could not create card image.");
+
+      const file = new File([blob], "Arshad-Iqbal-PrepCorex-card.png", {
+        type: "image/png",
+      });
+
+      try {
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: `${B_CARD_PROFILE.name} digital card`,
+            text: `${B_CARD_PROFILE.company} — ${B_CARD_PROFILE.tagline}`,
+          });
+          toast({
+            title: "Save to gallery",
+            description: "Choose Save Image / Photos to keep the card.",
+          });
+          return;
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") return;
+      }
+
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(href);
+      toast({
+        title: "Card image ready",
+        description: "Saved to downloads — open it to keep in your gallery.",
+      });
+    } catch (err: unknown) {
+      setSheet(previousSheet);
+      toast({
+        variant: "destructive",
+        title: "Could not save card",
+        description: err instanceof Error ? err.message : "Try again.",
+      });
+    } finally {
+      setSavingCard(false);
+    }
   };
 
   const shareCard = async () => {
@@ -181,7 +305,6 @@ export function DigitalBusinessCard() {
 
   return (
     <div className="relative min-h-[100dvh] overflow-hidden bg-[#1a120c]">
-      {/* Soft event / warehouse atmosphere behind the card */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_#3a2418_0%,_#1a120c_55%,_#0d0a08_100%)]"
@@ -196,8 +319,10 @@ export function DigitalBusinessCard() {
       />
 
       <div className="relative mx-auto flex min-h-[100dvh] w-full max-w-md items-center justify-center px-3 py-6">
-        <article className="relative w-full overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_-20px_rgba(0,0,0,0.55)]">
-          {/* Orange wave header */}
+        <article
+          ref={cardRef}
+          className="relative w-full overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_-20px_rgba(0,0,0,0.55)]"
+        >
           <header className="relative overflow-hidden px-5 pb-16 pt-5 text-white">
             <div
               aria-hidden
@@ -237,7 +362,6 @@ export function DigitalBusinessCard() {
             </p>
           </header>
 
-          {/* Profile */}
           <div className="-mt-10 flex flex-col items-center px-5 text-center">
             <div className="relative mb-3">
               <div className="absolute -inset-1 rounded-full bg-gradient-to-br from-[#ff7a2f] to-[#e03d00] opacity-90" />
@@ -245,6 +369,7 @@ export function DigitalBusinessCard() {
                 src={B_CARD_PROFILE.photoSrc}
                 alt={B_CARD_PROFILE.name}
                 className="relative h-[7.25rem] w-[7.25rem] rounded-full object-cover object-top ring-[3px] ring-white"
+                crossOrigin="anonymous"
               />
             </div>
             <h1 className="text-[1.65rem] font-bold tracking-tight text-slate-900">
@@ -266,7 +391,6 @@ export function DigitalBusinessCard() {
             </div>
           </div>
 
-          {/* Socials + QR (side by side like selected mockup) */}
           <div className="mt-5 flex items-center justify-between gap-3 px-5 pb-6">
             <div className="flex flex-1 flex-wrap items-center gap-2.5">
               {socialItems.map((social) => {
@@ -302,7 +426,6 @@ export function DigitalBusinessCard() {
             </div>
           </div>
 
-          {/* Compact contact taps */}
           <div className="space-y-1 border-t border-slate-100 px-5 py-3 text-center text-xs text-slate-500">
             <a href={`tel:${B_CARD_PROFILE.phoneE164}`} className="block font-medium text-slate-700">
               {B_CARD_PROFILE.phoneDisplay}
@@ -320,9 +443,8 @@ export function DigitalBusinessCard() {
             </a>
           </div>
 
-          {/* Re-open actions when sheet closed */}
           {!sheet ? (
-            <div className="border-t border-slate-100 px-5 py-4">
+            <div className="space-y-2 border-t border-slate-100 px-5 py-4">
               <Button
                 type="button"
                 className="h-12 w-full rounded-2xl bg-[#ff4d12] text-base font-semibold hover:bg-[#e03d00]"
@@ -330,9 +452,23 @@ export function DigitalBusinessCard() {
               >
                 Connect
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 w-full rounded-2xl border-orange-200 text-[#ff4d12] hover:bg-orange-50"
+                disabled={savingCard}
+                onClick={() => void saveCardImage()}
+              >
+                {savingCard ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <ImageDown className="mr-2 h-4 w-4" />
+                )}
+                Save card
+              </Button>
               <button
                 type="button"
-                className="mt-2 w-full text-center text-xs font-semibold text-slate-500"
+                className="w-full text-center text-xs font-semibold text-slate-500"
                 onClick={() => void shareCard()}
               >
                 Share card link
@@ -344,7 +480,6 @@ export function DigitalBusinessCard() {
         </article>
       </div>
 
-      {/* Bottom sheet — matches selected mockup */}
       {sheet ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 sm:items-center sm:p-4">
           <button
@@ -363,7 +498,7 @@ export function DigitalBusinessCard() {
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
                   {sheet === "actions"
-                    ? "Save our card, chat on WhatsApp, or leave your details."
+                    ? "Save our contact, save the card image, chat on WhatsApp, or leave your details."
                     : "We’ll save this in the Prep Services CRM address book."}
                 </p>
               </div>
@@ -380,16 +515,33 @@ export function DigitalBusinessCard() {
               <div className="mt-2 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-100">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50"
-                  onClick={() => {
-                    downloadVCard();
-                    setSheet(null);
-                  }}
+                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"
+                  disabled={savingContact}
+                  onClick={() => void saveOurContact()}
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-[#ff4d12]">
-                    <Plus className="h-5 w-5" />
+                    {savingContact ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Plus className="h-5 w-5" />
+                    )}
                   </span>
                   Save our contact
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-4 text-left text-[15px] font-semibold text-slate-900 hover:bg-orange-50 disabled:opacity-60"
+                  disabled={savingCard}
+                  onClick={() => void saveCardImage()}
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#ff4d12] text-white">
+                    {savingCard ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ImageDown className="h-4 w-4" />
+                    )}
+                  </span>
+                  Save card
                 </button>
                 <button
                   type="button"

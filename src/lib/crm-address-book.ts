@@ -6,7 +6,8 @@ export type CrmContactSource =
   | "prepcorex"
   | "email"
   | "facebook"
-  | "whatsapp";
+  | "whatsapp"
+  | "b_card";
 
 export const CRM_CONTACT_SOURCE_LABELS: Record<CrmContactSource, string> = {
   manual: "Manual",
@@ -17,6 +18,7 @@ export const CRM_CONTACT_SOURCE_LABELS: Record<CrmContactSource, string> = {
   email: "Email",
   facebook: "Facebook",
   whatsapp: "WhatsApp",
+  b_card: "B-Card",
 };
 
 export interface CrmAddressContact {

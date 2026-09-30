@@ -924,6 +924,7 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                   <SelectItem value="email">Email</SelectItem>
                   <SelectItem value="facebook">Facebook</SelectItem>
                   <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                  <SelectItem value="b_card">B-Card</SelectItem>
                   <SelectItem value="lead">Lead</SelectItem>
                   <SelectItem value="quote">Quotation</SelectItem>
                   <SelectItem value="invoice">Invoice</SelectItem>

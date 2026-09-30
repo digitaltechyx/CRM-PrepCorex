@@ -158,7 +158,7 @@ export function DigitalBusinessCard() {
       const res = await fetch("/api/b-card/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...lead, source: "form" }),
+        body: JSON.stringify({ ...lead, source: "b_card" }),
       });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error || "Could not save.");

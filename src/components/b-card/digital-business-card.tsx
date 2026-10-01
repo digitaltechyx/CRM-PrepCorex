@@ -360,11 +360,11 @@ export function DigitalBusinessCard() {
               />
             </svg>
 
-            <div className="relative mx-auto flex max-w-[18rem] items-center justify-center">
+            <div className="relative mx-auto flex w-[92%] max-w-[21rem] items-center justify-center">
               <img
                 src={B_CARD_PROFILE.heroBadgeSrc}
                 alt={B_CARD_PROFILE.tagline}
-                className="h-auto w-full rounded-2xl object-contain shadow-[0_8px_24px_rgba(0,0,0,0.25)]"
+                className="h-auto w-full object-contain"
               />
             </div>
           </header>

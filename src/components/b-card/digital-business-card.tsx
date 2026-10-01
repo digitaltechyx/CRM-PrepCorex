@@ -343,7 +343,7 @@ export function DigitalBusinessCard() {
           ref={cardRef}
           className="relative w-full overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_-20px_rgba(0,0,0,0.55)]"
         >
-          <header className="relative overflow-hidden px-5 pb-16 pt-5 text-white">
+          <header className="relative overflow-hidden px-5 pb-16 pt-6 text-white">
             <div
               aria-hidden
               className="absolute inset-0 bg-gradient-to-br from-[#ff7a2f] via-[#ff4d12] to-[#e03d00]"
@@ -360,26 +360,13 @@ export function DigitalBusinessCard() {
               />
             </svg>
 
-            <div className="relative flex items-start justify-between gap-3">
-              <div className="flex max-w-[54%] items-center overflow-hidden rounded-2xl border border-white bg-transparent px-[2px] py-[1px]">
-                <img
-                  src={B_CARD_PROFILE.prepcorexLogoSrc}
-                  alt="PrepCorex"
-                  className="h-12 w-auto max-w-full object-contain object-center"
-                />
-              </div>
-              <div className="flex max-w-[42%] items-center overflow-hidden rounded-2xl border border-white bg-transparent px-[2px] py-[1px]">
-                <img
-                  src={B_CARD_PROFILE.companyLogoSrc}
-                  alt="Prep Services FBA"
-                  className="h-12 w-auto max-w-full object-contain object-center"
-                />
-              </div>
+            <div className="relative mx-auto flex max-w-[18rem] items-center justify-center">
+              <img
+                src={B_CARD_PROFILE.heroBadgeSrc}
+                alt={B_CARD_PROFILE.tagline}
+                className="h-auto w-full rounded-2xl object-contain shadow-[0_8px_24px_rgba(0,0,0,0.25)]"
+              />
             </div>
-
-            <p className="relative mt-5 text-center font-[Georgia,serif] text-[15px] italic leading-snug text-white/95">
-              {B_CARD_PROFILE.tagline}
-            </p>
           </header>
 
           <div className="-mt-10 flex flex-col items-center px-5 text-center">

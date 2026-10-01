@@ -433,18 +433,24 @@ export function DigitalBusinessCard() {
             </div>
           </div>
 
-          <div className="space-y-1 border-t border-slate-100 px-5 py-3 text-center text-xs text-slate-500">
-            <a href={`tel:${B_CARD_PROFILE.phoneE164}`} className="block font-medium text-slate-700">
+          <div className="space-y-1 border-t border-slate-100 px-5 py-3 text-center text-slate-500">
+            <a
+              href={`tel:${B_CARD_PROFILE.phoneE164}`}
+              className="block text-[14px] font-bold text-slate-700"
+            >
               {B_CARD_PROFILE.phoneDisplay}
             </a>
-            <a href={`mailto:${B_CARD_PROFILE.email}`} className="block break-all">
+            <a
+              href={`mailto:${B_CARD_PROFILE.email}`}
+              className="block break-all text-[13px]"
+            >
               {B_CARD_PROFILE.email}
             </a>
             <a
               href={B_CARD_PROFILE.website}
               target="_blank"
               rel="noopener noreferrer"
-              className="block font-semibold text-[#ff4d12]"
+              className="block text-xs font-semibold text-[#ff4d12]"
             >
               {B_CARD_PROFILE.websiteDisplay}
             </a>

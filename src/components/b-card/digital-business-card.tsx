@@ -106,7 +106,7 @@ export function DigitalBusinessCard() {
   const cardRef = useRef<HTMLElement | null>(null);
   const [cardUrl, setCardUrl] = useState("https://crm.prepservicesfba.com/b-card");
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
-  const [sheet, setSheet] = useState<SheetMode>("actions");
+  const [sheet, setSheet] = useState<SheetMode>("share-form");
   const [savingLead, setSavingLead] = useState(false);
   const [savingCard, setSavingCard] = useState(false);
   const [savingContact, setSavingContact] = useState(false);

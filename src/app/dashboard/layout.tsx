@@ -35,11 +35,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <CrmPipelineProvider>
       <CrmLeadsProvider>
-        {/* h-dvh + overflow-hidden: viewport-fixed shell; only <main> scrolls — sidebar stays put */}
-        <div className="flex h-dvh min-h-0 w-full max-w-full overflow-hidden">
+        {/* Mobile: column (top bar + scroll). Desktop: row (sidebar + scroll). */}
+        <div className="flex h-dvh min-h-0 w-full max-w-full flex-col overflow-hidden md:flex-row">
           <CrmSidebar />
-          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-background p-4 sm:p-6">
-            {children}
+          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-background p-3 sm:p-4 md:p-6">
+            <div className="mx-auto w-full min-w-0 max-w-full">{children}</div>
           </main>
         </div>
       </CrmLeadsProvider>

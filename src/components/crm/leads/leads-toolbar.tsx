@@ -39,7 +39,7 @@ export function LeadsToolbar({
     <div className="rounded-2xl border border-border/70 bg-card/70 p-4 shadow-sm ring-1 ring-black/[0.03] backdrop-blur-sm dark:bg-card/50 dark:ring-white/[0.05]">
       <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Filters</p>
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-      <div className="min-w-[200px] flex-1">
+      <div className="min-w-0 flex-1 sm:min-w-[200px]">
         <label className="mb-1.5 block text-xs font-semibold text-foreground/80">Search</label>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/60" />

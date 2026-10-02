@@ -32,7 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { BookUser, Loader2, Plus, RefreshCcw, ShieldAlert, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { BookUser, ImageIcon, Loader2, Plus, RefreshCcw, ScanLine, ShieldAlert, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCollection } from "@/hooks/use-collection";
 import {
@@ -48,6 +48,8 @@ import {
   stripUndefinedFields,
 } from "@/lib/crm-address-book";
 import { ConvertContactToLeadDialog } from "@/components/crm/address-book/convert-contact-to-lead-dialog";
+import { ScanBusinessCardQrDialog } from "@/components/crm/address-book/scan-business-card-qr-dialog";
+import { ScanBusinessCardPhotoDialog } from "@/components/crm/address-book/scan-business-card-photo-dialog";
 
 type ContactForm = {
   fullName: string;
@@ -140,6 +142,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
   const [completenessFilter, setCompletenessFilter] = useState<"all" | "with_email" | "with_phone" | "with_address">("all");
   const [sortBy, setSortBy] = useState<"recent" | "name_asc" | "name_desc" | "company_asc">("recent");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [scanQrOpen, setScanQrOpen] = useState(false);
+  const [scanPhotoOpen, setScanPhotoOpen] = useState(false);
   const [editing, setEditing] = useState<CrmAddressContact | null>(null);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState<"" | SyncKey>("");
@@ -249,7 +253,8 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
       !seed.phone &&
       !seed.prepcorexUserId &&
       !seed.facebookMessengerId &&
-      !seed.whatsappId
+      !seed.whatsappId &&
+      !seed.notes
     ) {
       return "skipped";
     }
@@ -406,6 +411,56 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function saveScannedBusinessCard(seed: AddressBookSeed) {
+    const working = [...contacts];
+    const forced: AddressBookSeed = {
+      ...seed,
+      source: "b_card",
+      fullName: seed.fullName?.trim() || seed.email || seed.phone || seed.whatsappId || "QR contact",
+      notes: seed.notes || "Scanned business card QR",
+    };
+    const existing = findExistingContact(working, forced);
+    if (isSpamContact(existing)) {
+      toast({
+        variant: "destructive",
+        title: "Contact is in spam",
+        description: "Restore it from Spam contacts before saving this QR again.",
+      });
+      return;
+    }
+    const merged = stripUndefinedFields(
+      mergeSeedIntoContact(existing, forced) as Record<string, unknown>
+    ) as Omit<CrmAddressContact, "id">;
+    // Always tag QR scans as B-Card so the B-Card filter lists them.
+    merged.source = "b_card";
+
+    if (existing) {
+      const { createdBy: _cb, createdAt: _ca, updatedAt: _ua, ...updatePayload } = merged;
+      await updateDoc(doc(db, "crm_contacts", existing.id), {
+        ...stripUndefinedFields(updatePayload as Record<string, unknown>),
+        source: "b_card",
+        updatedAt: serverTimestamp(),
+      });
+      toast({
+        title: "QR contact updated",
+        description: "Saved under B-Card. Filter is set to B-Card so you can review it.",
+      });
+    } else {
+      await addDoc(collection(db, "crm_contacts"), {
+        ...merged,
+        source: "b_card",
+        createdBy: user?.uid || "",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      toast({
+        title: "QR contact saved",
+        description: "Saved under B-Card. Filter is set to B-Card so you can review it.",
+      });
+    }
+    setSourceFilter("b_card");
   }
 
   async function syncCollection(
@@ -710,7 +765,7 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
             <CardDescription>
               {isSpamMode
                 ? "Contacts marked as spam. They stay blocked from PrepCorex, email, Facebook, WhatsApp, lead, quotation, and invoice sync."
-                : "Unified contacts from PrepCorex, email, Facebook Messenger, WhatsApp Cloud API, leads, quotations, and invoices."}
+                : "Unified contacts from PrepCorex, email, Facebook Messenger, WhatsApp Cloud API, leads, quotations, invoices, and scanned business card QRs."}
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -797,6 +852,24 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
                 >
                   {syncing === "invoices" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
                   Sync invoices
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setScanQrOpen(true)}
+                  title="Scan a business card QR into the address book (saved as B-Card)"
+                >
+                  <ScanLine className="mr-2 h-4 w-4" />
+                  Scan QR
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setScanPhotoOpen(true)}
+                  title="Photograph or upload a printed business card (in-browser OCR, saved as B-Card)"
+                >
+                  <ImageIcon className="mr-2 h-4 w-4" />
+                  Scan card photo
                 </Button>
                 <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                   <DialogTrigger asChild>
@@ -1120,6 +1193,21 @@ export function AddressBookClient({ mode = "active" }: AddressBookClientProps) {
         contacts={convertContacts}
         onConverted={() => setSelectedIds(new Set())}
       />
+
+      {!isSpamMode ? (
+        <>
+          <ScanBusinessCardQrDialog
+            open={scanQrOpen}
+            onOpenChange={setScanQrOpen}
+            onSave={saveScannedBusinessCard}
+          />
+          <ScanBusinessCardPhotoDialog
+            open={scanPhotoOpen}
+            onOpenChange={setScanPhotoOpen}
+            onSave={saveScannedBusinessCard}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

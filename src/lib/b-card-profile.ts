@@ -42,7 +42,7 @@ export const B_CARD_PROFILE = {
 export function bCardWhatsAppUrl(message?: string): string {
   const text =
     message?.trim() ||
-    `Hi Arshad — I found your digital card and would like to connect about fulfillment.`;
+    `Hi! We met recently and I scanned your business card. Interested in learning more about your 3PL`;
   return `https://wa.me/${B_CARD_PROFILE.phoneE164.replace(/\D/g, "")}?text=${encodeURIComponent(text)}`;
 }
 

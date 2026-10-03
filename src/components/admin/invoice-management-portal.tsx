@@ -54,6 +54,7 @@ import {
   CheckCircle,
   CircleArrowLeft,
   Clock,
+  Copy,
   Download,
   FileText,
   Loader2,
@@ -192,7 +193,7 @@ const TAX_RATE = 0.06625;
 
 const DEFAULT_COMPANY = {
   companyName: "Prep Services FBA",
-  companyAddress: "7000 Atrium Way CO3",
+  companyAddress: "7000 Atrium Way C03",
   companyCityStateZip: "Mount Laurel, NJ, 08054",
   companyCountry: "United States",
   companyPhone: "+1-347-661-3010",
@@ -1947,6 +1948,83 @@ Prep Services FBA Team`;
     setActiveTab("new");
   };
 
+  /** Clone any-status invoice into a new draft form (new number; payments/status cleared). */
+  const handleCopyInvoice = (invoice: ExternalInvoice) => {
+    const today = new Date();
+    const due = new Date(today);
+    due.setDate(today.getDate() + 2);
+
+    const normalizedItems = (invoice.items || []).map((it: ExternalInvoiceItem) => ({
+      id: crypto.randomUUID(),
+      description: String(it.description ?? ""),
+      quantity: Number(it.quantity ?? 0),
+      unitPrice: Number(it.unitPrice ?? 0),
+      compareUnitPrice: Number(it.compareUnitPrice ?? 0),
+      amount: Number(it.amount ?? 0),
+    }));
+    const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(
+      (it: ExternalInvoiceItem) => ({
+        id: crypto.randomUUID(),
+        description: String(it.description ?? ""),
+        quantity: Number(it.quantity ?? 0),
+        unitPrice: Number(it.unitPrice ?? 0),
+        compareUnitPrice: Number(it.compareUnitPrice ?? 0),
+        amount: Number(it.amount ?? 0),
+      })
+    );
+
+    const shippingCost = Number(invoice.shippingCost ?? 0);
+    const salesTax = Number(invoice.salesTax ?? 0);
+    const subtotal =
+      normalizedItems.reduce((sum, item) => sum + Number(item.amount || 0), 0) +
+      normalizedShippingLabels.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const total = Number(invoice.total ?? subtotal + salesTax + shippingCost);
+
+    setFormData({
+      status: "draft",
+      invoiceNumber: createInvoiceNumber(),
+      invoiceDate: formatDateInputLocal(today),
+      dueDate: formatDateInputLocal(due),
+      companyName: invoice.companyName || DEFAULT_COMPANY.companyName,
+      companyAddress: invoice.companyAddress || DEFAULT_COMPANY.companyAddress,
+      companyCityStateZip: invoice.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
+      companyCountry: invoice.companyCountry || DEFAULT_COMPANY.companyCountry,
+      companyPhone: invoice.companyPhone || DEFAULT_COMPANY.companyPhone,
+      companyEmail: invoice.companyEmail || DEFAULT_COMPANY.companyEmail,
+      invoiceNote: invoice.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
+      fobPoint: invoice.fobPoint || DEFAULT_INVOICE_META.fobPoint,
+      shippingTerms: invoice.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
+      shippedVia: invoice.shippedVia || DEFAULT_INVOICE_META.shippedVia,
+      clientName: invoice.clientName || "",
+      clientEmail: invoice.clientEmail || "",
+      clientPhone: invoice.clientPhone || "",
+      clientAddress: invoice.clientAddress || "",
+      clientCity: invoice.clientCity || "",
+      clientState: invoice.clientState || "",
+      clientZip: invoice.clientZip || "",
+      clientCountry: invoice.clientCountry || "",
+      terms: invoice.terms || INVOICE_TERMS,
+      items: normalizedItems.length ? normalizedItems : [createEmptyItem()],
+      shippingLabelItems: normalizedShippingLabels,
+      subtotal,
+      salesTax,
+      shippingCost,
+      total,
+      amountPaid: 0,
+      outstandingBalance: total,
+      payments: [],
+      discountType: invoice.discountType,
+      discountValue: invoice.discountValue,
+    });
+    setClientLookup("");
+    setEditingInvoiceId(null);
+    setActiveTab("new");
+    toast({
+      title: "Invoice copied",
+      description: `New draft from ${invoice.invoiceNumber}. Edit anything, then save or send.`,
+    });
+  };
+
   const handleDeleteInvoice = (invoice: ExternalInvoice) => {
     setDeleteInvoice(invoice);
     setDeleteReason("");
@@ -2642,6 +2720,15 @@ Prep Services FBA Team`;
             </div>
             {options?.showActions && (
               <div className="flex flex-wrap gap-1.5 justify-end items-center shrink-0 self-center md:self-auto">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={`${btnClass} hover:bg-sky-500 hover:text-white`}
+                  title="Copy to new invoice"
+                  onClick={() => handleCopyInvoice(invoice)}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
                 {options?.showViewOnly ? (
                   <Button
                     variant="outline"
@@ -3987,6 +4074,10 @@ Prep Services FBA Team`;
                             </Button>
                             <Button variant="outline" size="sm" onClick={() => handleEditInvoice(invoice)}>
                               Edit
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={() => handleCopyInvoice(invoice)}>
+                              <Copy className="h-4 w-4 mr-1" />
+                              Copy
                             </Button>
                             <Button variant="outline" size="sm" onClick={() => openEmailDialog(invoice)}>
                               Send

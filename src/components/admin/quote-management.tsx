@@ -175,7 +175,7 @@ const FOLLOW_UP_THROTTLE_MS = 10 * 60 * 1000;
 
 const COMPANY_INFO = {
   name: "Prep Services FBA",
-  addressLines: ["7000 Atrium Way B05", "Mount Laurel, NJ, 08054"],
+  addressLines: ["7000 Atrium Way C03", "Mount Laurel, NJ, 08054"],
   phone: "+1-347-661-3010",
   email: "info@prepservicesfba.com",
 };
@@ -1335,7 +1335,7 @@ Best regards,
 Arshad Iqbal
 info@prepservicesfba.com | +1 347 661 3010 (WhatsApp)
 www.prepservicesfba.com
-7000 Atrium Way B05, Mount Laurel, NJ 08054`,
+7000 Atrium Way C03, Mount Laurel, NJ 08054`,
       };
     }
 

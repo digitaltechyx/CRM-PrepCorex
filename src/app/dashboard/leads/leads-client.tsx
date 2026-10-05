@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { endOfDay, isWithinInterval, startOfDay } from "date-fns";
+import { endOfDay } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCrmLeads } from "@/contexts/crm-leads-context";
@@ -17,13 +17,13 @@ import { computeLeadStats } from "@/lib/crm-lead-stats";
 import { firestoreTimestampToDate } from "@/lib/crm-date-utils";
 import { Loader2, Sparkles } from "lucide-react";
 
+/** Due today + overdue (missed follow-ups stay visible). */
 function dueTodayLeads(leads: CrmLead[], now = new Date()) {
-  const dayStart = startOfDay(now);
   const dayEnd = endOfDay(now);
   return leads.filter((l) => {
     if (l.status === "dead" || l.status === "client") return false;
     const n = firestoreTimestampToDate(l.nextFollowUpAt ?? undefined);
-    return n && isWithinInterval(n, { start: dayStart, end: dayEnd });
+    return n != null && n.getTime() <= dayEnd.getTime();
   });
 }
 

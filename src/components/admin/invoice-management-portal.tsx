@@ -31,6 +31,7 @@ import {
   contactMatchesQuery,
   contactSuggestionLabel,
   getContactMatchKey,
+  stripUndefinedFields,
 } from "@/lib/crm-address-book";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1754,13 +1755,29 @@ Prep Services FBA Team`;
   };
 
   const saveInvoiceRecord = async (status: ExternalInvoiceStatus) => {
-    const payload: Omit<ExternalInvoice, "id"> = {
+    // Firestore rejects `undefined` anywhere in the document — strip before write.
+    const payload = stripUndefinedFields({
       ...formData,
       status,
       amountPaid: formData.amountPaid || 0,
-      outstandingBalance: formData.outstandingBalance || 0,
+      outstandingBalance:
+        formData.outstandingBalance ||
+        Number(
+          (
+            Number(formData.total || 0) +
+            Number(formData.lateFee || 0) -
+            Number(formData.amountPaid || 0)
+          ).toFixed(2)
+        ),
+      items: (formData.items || []).map((item) => stripUndefinedFields({ ...item })),
+      shippingLabelItems: (formData.shippingLabelItems || []).map((item) =>
+        stripUndefinedFields({ ...item })
+      ),
+      payments: (formData.payments || []).map((payment) =>
+        stripUndefinedFields({ ...payment })
+      ),
       updatedAt: serverTimestamp(),
-    };
+    }) as Omit<ExternalInvoice, "id">;
 
     if (editingInvoiceId) {
       await updateDoc(doc(db, "external_invoices", editingInvoiceId), payload as any);
@@ -1884,7 +1901,11 @@ Prep Services FBA Team`;
       }
     } catch (error) {
       console.error("Failed to save invoice:", error);
-      toast({ variant: "destructive", title: "Failed to save invoice." });
+      toast({
+        variant: "destructive",
+        title: "Failed to save invoice.",
+        description: error instanceof Error ? error.message : "Try again.",
+      });
     } finally {
       setSaving(false);
     }
@@ -1903,7 +1924,11 @@ Prep Services FBA Team`;
       openEmailDialog(savedInvoice);
     } catch (error) {
       console.error("Failed to prepare invoice for sending:", error);
-      toast({ variant: "destructive", title: "Failed to prepare invoice for sending." });
+      toast({
+        variant: "destructive",
+        title: "Failed to prepare invoice for sending.",
+        description: error instanceof Error ? error.message : "Could not save the draft before email.",
+      });
     } finally {
       setSaving(false);
     }

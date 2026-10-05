@@ -58,6 +58,7 @@ import {
   Copy,
   Download,
   FileText,
+  Globe,
   Loader2,
   Mail,
   Percent,
@@ -528,6 +529,7 @@ export function InvoiceManagementPortal() {
   const [testOverdueDialogOpen, setTestOverdueDialogOpen] = useState(false);
   const [testOverdueInvoiceId, setTestOverdueInvoiceId] = useState<string>("");
   const [isTestingOverdue, setIsTestingOverdue] = useState(false);
+  const [egressIpLoading, setEgressIpLoading] = useState(false);
 
   const invoiceContactOptions = useMemo(
     () =>
@@ -2149,6 +2151,43 @@ Prep Services FBA Team`;
     setEmailDialogOpen(true);
   };
 
+  const fetchMercuryEgressIp = async () => {
+    if (!user) {
+      toast({ variant: "destructive", title: "You must be logged in." });
+      return;
+    }
+    setEgressIpLoading(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch("/api/mercury/egress-ip", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to detect egress IP");
+      }
+      const ipv4 = String(data.ipv4 || "").trim();
+      if (ipv4 && typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(ipv4);
+      }
+      toast({
+        title: ipv4 ? `Vercel egress IP: ${ipv4}` : "Egress IP detected",
+        description: ipv4
+          ? "Copied to clipboard. Add this IPv4 to Mercury API token allowlist, then retry Send."
+          : JSON.stringify(data),
+      });
+      console.log("[mercury egress-ip]", data);
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Could not get egress IP",
+        description: error instanceof Error ? error.message : "Try again after deploy.",
+      });
+    } finally {
+      setEgressIpLoading(false);
+    }
+  };
+
   const sendInvoiceEmail = async () => {
     if (!activeEmailInvoice || !user) return;
     setIsSendingEmail(true);
@@ -3184,15 +3223,34 @@ Prep Services FBA Team`;
         <TabsContent value="new" className="space-y-4">
           <Card className="border-2 border-fuchsia-200 dark:border-fuchsia-800 shadow-lg">
             <CardHeader className="bg-gradient-to-r from-fuchsia-50 to-purple-50 dark:from-fuchsia-950/30 dark:to-purple-950/30 border-b border-fuchsia-200 dark:border-fuchsia-800">
-              <CardTitle className="flex items-center gap-2 text-fuchsia-700 dark:text-fuchsia-300">
-                <div className="p-2 rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-600 shadow-md">
-                  <FileText className="h-5 w-5 text-white" />
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-fuchsia-700 dark:text-fuchsia-300">
+                    <div className="p-2 rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-600 shadow-md">
+                      <FileText className="h-5 w-5 text-white" />
+                    </div>
+                    {editingInvoiceId ? "Edit Invoice" : "New Invoice"}
+                  </CardTitle>
+                  <CardDescription className="text-fuchsia-600/80 dark:text-fuchsia-400/80 mt-1.5">
+                    Fill out the invoice template and save or send it. Due date defaults to 48 hours.
+                  </CardDescription>
                 </div>
-                {editingInvoiceId ? "Edit Invoice" : "New Invoice"}
-              </CardTitle>
-              <CardDescription className="text-fuchsia-600/80 dark:text-fuchsia-400/80">
-                Fill out the invoice template and save or send it. Due date defaults to 48 hours.
-              </CardDescription>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={egressIpLoading || !user}
+                  onClick={() => void fetchMercuryEgressIp()}
+                >
+                  {egressIpLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Globe className="mr-2 h-4 w-4" />
+                  )}
+                  Get Vercel IP for Mercury
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="space-y-6">
               <style jsx global>{`

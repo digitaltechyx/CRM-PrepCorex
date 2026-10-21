@@ -19,6 +19,7 @@ import { useCollection } from "@/hooks/use-collection";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { readFetchError } from "@/lib/invoice-utils";
+import { MERCURY_INTEGRATION_ENABLED } from "@/lib/mercury-feature";
 import { cn } from "@/lib/utils";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
 import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
@@ -613,9 +614,10 @@ export function InvoiceManagementPortal() {
       cancelled: 0,
     };
     invoices.forEach((invoice) => {
+      // Overdue is an extra attention queue; still count the underlying status
+      // so newly emailed invoices appear under Sent even when due date is past.
       if (isOverdueInvoice(invoice)) {
         counts.overdue += 1;
-        return;
       }
       switch (invoice.status) {
         case "draft":
@@ -663,11 +665,10 @@ export function InvoiceManagementPortal() {
   }, [invoices, searchQuery, dateFrom, dateTo]);
 
   const draftInvoices = filteredInvoices.filter((invoice) => invoice.status === "draft");
-  const sentInvoices = filteredInvoices.filter(
-    (invoice) => invoice.status === "sent" && !isOverdueInvoice(invoice)
-  );
+  // Include overdue sent invoices here too — Overdue tab remains the action queue.
+  const sentInvoices = filteredInvoices.filter((invoice) => invoice.status === "sent");
   const partiallyPaidInvoices = filteredInvoices.filter(
-    (invoice) => invoice.status === "partially_paid" && !isOverdueInvoice(invoice)
+    (invoice) => invoice.status === "partially_paid"
   );
   const paidInvoices = filteredInvoices.filter((invoice) => invoice.status === "paid");
   const overdueInvoices = filteredInvoices.filter((invoice) => isOverdueInvoice(invoice));
@@ -2139,9 +2140,10 @@ Prep Services FBA Team`;
 
   const openEmailDialog = (invoice: ExternalInvoice) => {
     setActiveEmailInvoice(invoice);
-    const defaultMessage = invoice.mercuryPaymentUrl
-      ? `Please find your invoice attached.\n\nPay securely online (ACH, wire, or card):\n${invoice.mercuryPaymentUrl}\n\nThank you,\nPrep Services FBA`
-      : `Please find your invoice attached.\n\nThank you,\nPrep Services FBA`;
+    const defaultMessage =
+      MERCURY_INTEGRATION_ENABLED && invoice.mercuryPaymentUrl
+        ? `Please find your invoice attached.\n\nPay securely online (ACH, wire, or card):\n${invoice.mercuryPaymentUrl}\n\nThank you,\nPrep Services FBA`
+        : `Please find your invoice attached.\n\nThank you,\nPrep Services FBA`;
     setEmailForm({
       to: invoice.clientEmail || "",
       subject: `Prep Services FBA - Invoice ${invoice.invoiceNumber}`,
@@ -2201,43 +2203,47 @@ Prep Services FBA Team`;
         headers["x-vercel-protection-bypass"] = vercelBypass;
       }
 
-      let mercuryPaymentUrl = activeEmailInvoice.mercuryPaymentUrl || "";
-      try {
-        const mercuryRes = await fetch("/api/mercury/invoices", {
-          method: "POST",
-          headers: {
-            ...headers,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ invoiceId: activeEmailInvoice.id }),
-        });
-        if (mercuryRes.ok) {
-          const mercuryData = (await mercuryRes.json()) as { mercuryPaymentUrl?: string };
-          mercuryPaymentUrl = mercuryData.mercuryPaymentUrl || mercuryPaymentUrl;
-        } else if (mercuryRes.status !== 503) {
-          const message = await readFetchError(
-            mercuryRes,
-            "Could not create Mercury payment link."
-          );
-          throw new Error(message);
+      let mercuryPaymentUrl = "";
+      if (MERCURY_INTEGRATION_ENABLED) {
+        mercuryPaymentUrl = activeEmailInvoice.mercuryPaymentUrl || "";
+        try {
+          const mercuryRes = await fetch("/api/mercury/invoices", {
+            method: "POST",
+            headers: {
+              ...headers,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ invoiceId: activeEmailInvoice.id }),
+          });
+          if (mercuryRes.ok) {
+            const mercuryData = (await mercuryRes.json()) as { mercuryPaymentUrl?: string };
+            mercuryPaymentUrl = mercuryData.mercuryPaymentUrl || mercuryPaymentUrl;
+          } else if (mercuryRes.status !== 503) {
+            const message = await readFetchError(
+              mercuryRes,
+              "Could not create Mercury payment link."
+            );
+            throw new Error(message);
+          }
+        } catch (mercuryError) {
+          console.error("Mercury invoice setup failed:", mercuryError);
+          const message =
+            mercuryError instanceof Error
+              ? mercuryError.message
+              : "Could not create Mercury payment link. Invoice was not sent.";
+          toast({
+            variant: "destructive",
+            title: "Mercury payment link failed",
+            description: message,
+          });
+          return;
         }
-      } catch (mercuryError) {
-        console.error("Mercury invoice setup failed:", mercuryError);
-        const message =
-          mercuryError instanceof Error
-            ? mercuryError.message
-            : "Could not create Mercury payment link. Invoice was not sent.";
-        toast({
-          variant: "destructive",
-          title: "Mercury payment link failed",
-          description: message,
-        });
-        return;
       }
 
-      const paymentBlock = mercuryPaymentUrl
-        ? `\n\nPay securely online (ACH, wire, or card):\n${mercuryPaymentUrl}`
-        : "";
+      const paymentBlock =
+        MERCURY_INTEGRATION_ENABLED && mercuryPaymentUrl
+          ? `\n\nPay securely online (ACH, wire, or card):\n${mercuryPaymentUrl}`
+          : "";
       const emailMessage =
         (emailForm.message || "Please find your invoice attached.").trim() + paymentBlock;
 
@@ -2306,7 +2312,7 @@ Prep Services FBA Team`;
 
       await updateDoc(doc(db, "external_invoices", activeEmailInvoice.id), {
         status: "sent",
-        sentAt: activeEmailInvoice.sentAt || new Date(),
+        sentAt: activeEmailInvoice.sentAt || serverTimestamp(),
         ...(mercuryPaymentUrl
           ? {
               mercuryPaymentUrl,
@@ -2323,9 +2329,24 @@ Prep Services FBA Team`;
         invoiceNumber: activeEmailInvoice.invoiceNumber,
         clientName: activeEmailInvoice.clientName,
       });
-      toast({ title: "Invoice send." });
+
+      const sentInvoice: ExternalInvoice = {
+        ...activeEmailInvoice,
+        status: "sent",
+        ...(mercuryPaymentUrl
+          ? { mercuryPaymentUrl, mercuryInvoiceStatus: "Unpaid" }
+          : {}),
+      };
+      const landedOverdue = isOverdueInvoice(sentInvoice);
+      toast({
+        title: "Invoice sent.",
+        description: landedOverdue
+          ? "Due date is past — it also appears under Overdue."
+          : undefined,
+      });
       setEmailDialogOpen(false);
       setActiveEmailInvoice(null);
+      setCurrentPage(1);
       setActiveTab("sent");
     } catch (error) {
       console.error("Failed to send invoice:", error);
@@ -3235,21 +3256,23 @@ Prep Services FBA Team`;
                     Fill out the invoice template and save or send it. Due date defaults to 48 hours.
                   </CardDescription>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={egressIpLoading || !user}
-                  onClick={() => void fetchMercuryEgressIp()}
-                >
-                  {egressIpLoading ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Globe className="mr-2 h-4 w-4" />
-                  )}
-                  Get Vercel IP for Mercury
-                </Button>
+                {MERCURY_INTEGRATION_ENABLED ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={egressIpLoading || !user}
+                    onClick={() => void fetchMercuryEgressIp()}
+                  >
+                    {egressIpLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Globe className="mr-2 h-4 w-4" />
+                    )}
+                    Get Vercel IP for Mercury
+                  </Button>
+                ) : null}
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -4223,7 +4246,9 @@ Prep Services FBA Team`;
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <CardTitle>Sent Invoices</CardTitle>
-                  <CardDescription>All sent invoices with outstanding balances.</CardDescription>
+                  <CardDescription>
+                    All emailed invoices (including overdue). Use the Overdue tab for late-fee follow-up.
+                  </CardDescription>
                 </div>
                 <Button
                   variant="outline"
@@ -4974,7 +4999,9 @@ Prep Services FBA Team`;
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="Zelle">Zelle</SelectItem>
-                  <SelectItem value="Mercury">Mercury</SelectItem>
+                  {MERCURY_INTEGRATION_ENABLED ? (
+                    <SelectItem value="Mercury">Mercury</SelectItem>
+                  ) : null}
                   <SelectItem value="ACH">ACH</SelectItem>
                   <SelectItem value="Wire">Wire</SelectItem>
                   <SelectItem value="Other">Other</SelectItem>

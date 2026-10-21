@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
+import { saveSentCopyViaImap } from "@/lib/imap-save-sent";
 
 export type SmtpConfig = {
   host: string;
@@ -89,7 +90,22 @@ export async function sendSmtpMail(options: {
         text: message,
         attachments,
       });
-      return { host };
+
+      // Hostinger/Titan often does not auto-file app SMTP sends into Sent.
+      const sentCopy = await saveSentCopyViaImap({
+        config,
+        to,
+        subject,
+        message,
+        attachments,
+      });
+      if (!sentCopy.saved) {
+        console.warn("[SMTP] Sent copy not saved to Hostinger:", sentCopy.error);
+      } else {
+        console.log(`[SMTP] Sent copy saved to IMAP folder: ${sentCopy.path}`);
+      }
+
+      return { host, sentSaved: sentCopy.saved, sentPath: sentCopy.path };
     } catch (error) {
       lastError = error;
       const hasMoreHosts = host !== hostFallbacks(config.host).at(-1);

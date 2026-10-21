@@ -6,6 +6,7 @@ import {
   readMercuryProxyFromEnv,
 } from "@/lib/mercury-proxy-client";
 import { ensureMercuryInvoiceForCrmInvoice } from "@/lib/mercury-invoice-sync";
+import { MERCURY_INTEGRATION_ENABLED } from "@/lib/mercury-feature";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +66,13 @@ export async function POST(request: NextRequest) {
   const auth = await requireAdmin(request);
   if (!auth.ok) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
+  if (!MERCURY_INTEGRATION_ENABLED) {
+    return NextResponse.json(
+      { error: "Mercury integration is temporarily disabled." },
+      { status: 503 }
+    );
   }
 
   if (!isMercuryConfiguredLocally()) {

@@ -34,7 +34,25 @@ export async function POST(request: NextRequest) {
     });
 
     const result = await syncInfoMailbox({ folders, limit });
-    return NextResponse.json({ success: true, ...result, scheduled });
+
+    // Lexi: draft replies for newly synced inbox (best-effort; never fail sync).
+    let lexi = null;
+    const wantLexi = !folders || folders.includes("inbox");
+    if (wantLexi && process.env.OPENAI_API_KEY?.trim()) {
+      try {
+        const { lexiDraftRepliesForNewInbox } = await import(
+          "@/lib/lexi/email-drafts"
+        );
+        lexi = await lexiDraftRepliesForNewInbox(3);
+      } catch (error) {
+        console.warn("[Mailbox sync] Lexi drafts:", error);
+        lexi = {
+          error: error instanceof Error ? error.message : "lexi failed",
+        };
+      }
+    }
+
+    return NextResponse.json({ success: true, ...result, scheduled, lexi });
   } catch (error) {
     console.error("[Mailbox sync]", error);
     return NextResponse.json(

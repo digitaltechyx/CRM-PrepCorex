@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { canAccessCrm } from "@/lib/crm-access";
 import { CrmSidebar } from "@/components/crm/crm-sidebar";
+import { LexiFloatingChat } from "@/components/crm/lexi/lexi-floating-chat";
 import { CrmPipelineProvider } from "@/contexts/crm-pipeline-context";
 import { CrmLeadsProvider } from "@/contexts/crm-leads-context";
 
@@ -41,6 +42,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-background p-3 sm:p-4 md:p-6">
             <div className="mx-auto w-full min-w-0 max-w-full">{children}</div>
           </main>
+          <LexiFloatingChat />
         </div>
       </CrmLeadsProvider>
     </CrmPipelineProvider>

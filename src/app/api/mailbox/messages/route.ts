@@ -16,7 +16,9 @@ export async function GET(request: NextRequest) {
 
   const folderParam = String(request.nextUrl.searchParams.get("folder") || "inbox");
   const folder = (
-    ["inbox", "sent", "drafts", "spam"].includes(folderParam) ? folderParam : "inbox"
+    ["inbox", "sent", "drafts", "spam", "trash"].includes(folderParam)
+      ? folderParam
+      : "inbox"
   ) as MailboxFolderKey;
   const limit = Number(request.nextUrl.searchParams.get("limit") || 50);
 

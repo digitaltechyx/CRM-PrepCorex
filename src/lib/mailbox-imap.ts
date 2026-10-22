@@ -10,6 +10,7 @@ import {
   CRM_SETTINGS_COLLECTION,
   MAILBOX_COLLECTION,
   MAILBOX_SYNC_STATE_DOC,
+  type CrmMailboxAttachmentMeta,
   type CrmMailboxMessage,
   type MailboxFolderKey,
   type MailboxSyncFolderResult,
@@ -17,10 +18,14 @@ import {
 import { adminDb } from "@/lib/firebase-admin";
 
 const BODY_MAX_CHARS = 80_000;
+/** HTML can grow after inlining CID signature images as data URLs (Firestore 1MB cap). */
+const HTML_BODY_MAX_CHARS = 700_000;
+const INLINE_IMAGE_MAX_BYTES = 220_000;
 const SNIPPET_MAX_CHARS = 180;
 const DEFAULT_SYNC_LIMIT = 40;
 
-type FolderMap = Record<MailboxFolderKey, string>;
+type ImapFolderKey = "inbox" | "sent" | "drafts" | "spam" | "trash";
+type FolderMap = Record<ImapFolderKey, string>;
 
 type SyncState = {
   mailboxes?: Record<
@@ -124,6 +129,7 @@ export async function resolveMailboxFolderMap(
     sent: find("\\Sent", /sent/i, "INBOX.Sent"),
     drafts: find("\\Drafts", /draft/i, "INBOX.Drafts"),
     spam: find("\\Junk", /(junk|spam)/i, "INBOX.Spam"),
+    trash: find("\\Trash", /(trash|deleted|bin)/i, "INBOX.Trash"),
   };
 }
 
@@ -143,6 +149,46 @@ function getInfoMailbox(): ImapMailboxConfig {
     );
   }
   return info;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Hostinger (and most mail clients) embed signature logos as multipart/related
+ * CID images (`src="cid:..."`). Browsers cannot resolve those — rewrite to data URLs.
+ */
+function inlineCidImagesInHtml(
+  html: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  attachments: any[] | undefined
+): string {
+  if (!html || !attachments?.length) return html;
+  let out = html;
+  for (const att of attachments) {
+    if (!att) continue;
+    const cidRaw = String(att.cid || att.contentId || "").trim();
+    if (!cidRaw) continue;
+    const content = att.content;
+    if (!content) continue;
+    const buf = Buffer.isBuffer(content) ? content : Buffer.from(content);
+    if (!buf.length || buf.length > INLINE_IMAGE_MAX_BYTES) continue;
+    const contentType = String(att.contentType || "image/png").split(";")[0].trim();
+    if (!/^image\//i.test(contentType) && !/octet-stream/i.test(contentType)) {
+      continue;
+    }
+    const cid = cidRaw.replace(/^<|>$/g, "");
+    const dataUrl = `data:${contentType || "image/png"};base64,${buf.toString("base64")}`;
+    const patterns = [
+      new RegExp(`cid:${escapeRegExp(cid)}`, "gi"),
+      new RegExp(`cid:<${escapeRegExp(cid)}>`, "gi"),
+    ];
+    for (const re of patterns) {
+      out = out.replace(re, dataUrl);
+    }
+  }
+  return out;
 }
 
 async function upsertParsedMessage(input: {
@@ -165,14 +211,21 @@ async function upsertParsedMessage(input: {
   const cc = formatAddressList(ccList);
   const subject = String(parsed.subject || "(no subject)").trim() || "(no subject)";
   const textBody = truncate(String(parsed.text || ""), BODY_MAX_CHARS);
-  const htmlBody = truncate(
-    typeof parsed.html === "string" ? parsed.html : "",
-    BODY_MAX_CHARS
-  );
+  const rawHtml = typeof parsed.html === "string" ? parsed.html : "";
+  const htmlWithImages = inlineCidImagesInHtml(rawHtml, parsed.attachments);
+  const htmlBody = truncate(htmlWithImages, HTML_BODY_MAX_CHARS);
   const snippetSource = textBody || htmlBody.replace(/<[^>]+>/g, " ");
   const snippet = truncate(snippetSource.replace(/\s+/g, " ").trim(), SNIPPET_MAX_CHARS);
   const date = parsed.date && !Number.isNaN(parsed.date.getTime()) ? parsed.date : new Date();
   const flagSet = input.flags instanceof Set ? input.flags : new Set(input.flags || []);
+  const attachments: CrmMailboxAttachmentMeta[] = (parsed.attachments || [])
+    .filter((att) => att && !att.related)
+    .map((att, index) => ({
+      index,
+      filename: String(att.filename || `attachment-${index + 1}`).slice(0, 180),
+      contentType: String(att.contentType || "application/octet-stream"),
+      size: Number(att.size || (Buffer.isBuffer(att.content) ? att.content.length : 0) || 0),
+    }));
 
   const message: CrmMailboxMessage = {
     id: docId(input.mailbox.id, input.folder, input.uid),
@@ -182,6 +235,7 @@ async function upsertParsedMessage(input: {
     imapFolder: input.imapFolder,
     uid: input.uid,
     messageId: parsed.messageId ? String(parsed.messageId) : undefined,
+    inReplyTo: parsed.inReplyTo ? String(parsed.inReplyTo) : undefined,
     subject,
     from: from.email || "unknown",
     fromName: from.name,
@@ -194,7 +248,8 @@ async function upsertParsedMessage(input: {
     htmlBody: htmlBody || undefined,
     seen: flagSet.has("\\Seen"),
     flagged: flagSet.has("\\Flagged"),
-    hasAttachments: Boolean(parsed.attachments?.length),
+    hasAttachments: attachments.length > 0,
+    attachments: attachments.length ? attachments : undefined,
     syncedAt: new Date().toISOString(),
   };
 
@@ -298,7 +353,10 @@ export async function syncInfoMailbox(options?: {
   folders: MailboxSyncFolderResult[];
 }> {
   const mailbox = getInfoMailbox();
-  const foldersToSync = options?.folders || (["inbox", "sent", "drafts", "spam"] as MailboxFolderKey[]);
+  const foldersToSync = (
+    options?.folders ||
+    (["inbox", "sent", "drafts", "spam", "trash"] as MailboxFolderKey[])
+  ).filter((f): f is ImapFolderKey => f !== "scheduled");
   const limit = options?.limit || DEFAULT_SYNC_LIMIT;
 
   const stateRef = adminDb().collection(CRM_SETTINGS_COLLECTION).doc(MAILBOX_SYNC_STATE_DOC);
@@ -348,8 +406,128 @@ export async function syncInfoMailbox(options?: {
       { merge: true }
     );
 
+    if (foldersToSync.includes("sent")) {
+      await purgeOptimisticSentDuplicates().catch((error) => {
+        console.warn("[Mailbox] purge optimistic sent:", error);
+      });
+    }
+
     return { mailboxEmail: mailbox.user, folders: results };
   });
+}
+
+/** Remove temporary local Sent rows once the real IMAP copy is synced. */
+export async function purgeOptimisticSentDuplicates(): Promise<number> {
+  const mailbox = getInfoMailbox();
+  const snap = await adminDb()
+    .collection(MAILBOX_COLLECTION)
+    .where("mailboxId", "==", mailbox.id)
+    .where("folder", "==", "sent")
+    .get();
+
+  const docs = snap.docs.map((d) => ({
+    ref: d.ref,
+    data: { ...(d.data() as CrmMailboxMessage & { localOptimistic?: boolean }), id: d.id },
+  }));
+
+  const real = docs.filter(
+    (d) =>
+      !d.data.localOptimistic &&
+      !String(d.data.id).startsWith("info_sent_local_") &&
+      Number(d.data.uid || 0) > 0
+  );
+  const optimistic = docs.filter(
+    (d) =>
+      d.data.localOptimistic === true ||
+      String(d.data.id).startsWith("info_sent_local_")
+  );
+
+  let deleted = 0;
+  for (const opt of optimistic) {
+    const match = real.find((r) => {
+      if (
+        opt.data.messageId &&
+        r.data.messageId &&
+        normalizeMessageId(opt.data.messageId) ===
+          normalizeMessageId(r.data.messageId)
+      ) {
+        return true;
+      }
+      const sameSubject =
+        normalizeSubject(opt.data.subject) === normalizeSubject(r.data.subject);
+      const sameTo =
+        String(opt.data.to || "").toLowerCase().trim() ===
+        String(r.data.to || "").toLowerCase().trim();
+      const closeInTime =
+        Math.abs(Number(opt.data.dateMs || 0) - Number(r.data.dateMs || 0)) <
+        15 * 60 * 1000;
+      return sameSubject && sameTo && closeInTime;
+    });
+    if (match) {
+      await opt.ref.delete();
+      deleted += 1;
+    }
+  }
+
+  // Also drop exact Message-ID duplicates among real IMAP rows (SMTP + IMAP append).
+  const byMessageId = new Map<string, typeof docs>();
+  for (const row of real) {
+    const mid = normalizeMessageId(row.data.messageId || "");
+    if (!mid) continue;
+    const list = byMessageId.get(mid) || [];
+    list.push(row);
+    byMessageId.set(mid, list);
+  }
+  for (const list of byMessageId.values()) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => Number(b.data.uid || 0) - Number(a.data.uid || 0));
+    for (const dup of list.slice(1)) {
+      await dup.ref.delete();
+      deleted += 1;
+    }
+  }
+
+  // Fingerprint dedupe for near-identical Sent rows (keep highest IMAP uid).
+  const byFp = new Map<string, typeof real>();
+  for (const row of real) {
+    const fp = sentFingerprint(row.data);
+    const list = byFp.get(fp) || [];
+    list.push(row);
+    byFp.set(fp, list);
+  }
+  for (const list of byFp.values()) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => Number(b.data.uid || 0) - Number(a.data.uid || 0));
+    for (const dup of list.slice(1)) {
+      await dup.ref.delete();
+      deleted += 1;
+    }
+  }
+
+  return deleted;
+}
+
+function normalizeMessageId(id: string): string {
+  return String(id || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^<|>$/g, "");
+}
+
+function normalizeSubject(subject: string): string {
+  return String(subject || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function sentFingerprint(msg: CrmMailboxMessage): string {
+  const bucket = Math.floor(Number(msg.dateMs || 0) / (5 * 60 * 1000));
+  return [
+    normalizeSubject(msg.subject),
+    String(msg.to || "").toLowerCase().trim(),
+    String(bucket),
+  ].join("|");
 }
 
 export async function listMailboxMessages(input: {
@@ -365,13 +543,80 @@ export async function listMailboxMessages(input: {
     .where("folder", "==", input.folder)
     .get();
 
-  return snap.docs
+  const rows = snap.docs
     .map((doc) => {
-      const data = doc.data() as CrmMailboxMessage;
+      const data = doc.data() as CrmMailboxMessage & { localOptimistic?: boolean };
       return { ...data, id: doc.id };
     })
-    .sort((a, b) => Number(b.dateMs || 0) - Number(a.dateMs || 0))
-    .slice(0, limit);
+    .sort((a, b) => Number(b.dateMs || 0) - Number(a.dateMs || 0));
+
+  // Prefer real IMAP rows over temporary local Sent copies; hide near-duplicates.
+  const deduped: typeof rows = [];
+  const seenIds = new Set<string>();
+  const seenFp = new Set<string>();
+
+  for (const row of rows) {
+    const mid = normalizeMessageId(row.messageId || "");
+    if (mid) {
+      if (seenIds.has(mid)) continue;
+      seenIds.add(mid);
+    }
+    if (input.folder === "sent") {
+      const fp = sentFingerprint(row);
+      if (seenFp.has(fp)) continue;
+      seenFp.add(fp);
+    }
+    deduped.push(row);
+  }
+
+  return deduped.slice(0, limit);
+}
+
+async function rehydrateCidImages(
+  message: CrmMailboxMessage
+): Promise<CrmMailboxMessage> {
+  if (!message.uid || !message.imapFolder) return message;
+  const mailbox = getInfoMailbox();
+  return withImapClient(mailbox, async (client) => {
+    const lock = await client.getMailboxLock(message.imapFolder);
+    try {
+      let source: Buffer | null = null;
+      for await (const msg of client.fetch(
+        String(message.uid),
+        { source: true, uid: true },
+        { uid: true }
+      )) {
+        if (msg.source) {
+          source = Buffer.isBuffer(msg.source)
+            ? msg.source
+            : Buffer.from(msg.source);
+        }
+      }
+      if (!source) return message;
+
+      const parsed = await simpleParser(source);
+      const rawHtml =
+        typeof parsed.html === "string"
+          ? parsed.html
+          : String(message.htmlBody || "");
+      const htmlBody = truncate(
+        inlineCidImagesInHtml(rawHtml, parsed.attachments),
+        HTML_BODY_MAX_CHARS
+      );
+      if (!htmlBody || htmlBody === message.htmlBody) return message;
+
+      await adminDb()
+        .collection(MAILBOX_COLLECTION)
+        .doc(message.id)
+        .set(
+          { htmlBody, syncedAt: new Date().toISOString() },
+          { merge: true }
+        );
+      return { ...message, htmlBody };
+    } finally {
+      lock.release();
+    }
+  });
 }
 
 export async function getMailboxMessage(
@@ -379,7 +624,23 @@ export async function getMailboxMessage(
 ): Promise<CrmMailboxMessage | null> {
   const snap = await adminDb().collection(MAILBOX_COLLECTION).doc(id).get();
   if (!snap.exists) return null;
-  return { ...(snap.data() as CrmMailboxMessage), id: snap.id };
+  let message = { ...(snap.data() as CrmMailboxMessage), id: snap.id };
+
+  // Older syncs stored cid: image refs without bytes — fix on open (signature logos).
+  if (
+    message.uid > 0 &&
+    message.imapFolder &&
+    typeof message.htmlBody === "string" &&
+    /cid:/i.test(message.htmlBody)
+  ) {
+    try {
+      message = await rehydrateCidImages(message);
+    } catch (error) {
+      console.warn("[Mailbox] CID image rehydrate failed:", error);
+    }
+  }
+
+  return message;
 }
 
 export async function markMailboxMessageSeen(id: string): Promise<void> {
@@ -413,12 +674,16 @@ export async function moveMailboxMessage(input: {
   const message = await getMailboxMessage(input.id);
   if (!message) throw new Error("Message not found.");
   if (message.folder === input.targetFolder) return message;
+  if (input.targetFolder === "scheduled" || message.folder === "scheduled") {
+    throw new Error("Scheduled messages cannot be moved via IMAP.");
+  }
+  const targetFolder = input.targetFolder as ImapFolderKey;
 
   const mailbox = getInfoMailbox();
 
   await withImapClient(mailbox, async (client) => {
     const folderMap = await resolveMailboxFolderMap(client);
-    const targetPath = folderMap[input.targetFolder];
+    const targetPath = folderMap[targetFolder];
     const lock = await client.getMailboxLock(message.imapFolder);
     try {
       await client.messageMove({ uid: message.uid }, targetPath, { uid: true });
@@ -434,8 +699,11 @@ export async function moveMailboxMessage(input: {
 
 export async function saveMailboxDraft(input: {
   to: string;
+  cc?: string;
   subject: string;
   message: string;
+  html?: string;
+  attachments?: { filename: string; content: Buffer }[];
 }): Promise<{ saved: boolean; path?: string; error?: string }> {
   const mailbox = getInfoMailbox();
   const MailComposer = (await import("nodemailer/lib/mail-composer")).default;
@@ -443,8 +711,14 @@ export async function saveMailboxDraft(input: {
   const composer = new MailComposer({
     from,
     to: input.to,
+    ...(input.cc?.trim() ? { cc: input.cc.trim() } : {}),
     subject: input.subject || "(no subject)",
     text: input.message || "",
+    ...(input.html ? { html: input.html } : {}),
+    attachments: (input.attachments || []).map((file) => ({
+      filename: file.filename,
+      content: file.content,
+    })),
   });
   const raw = await composer.compile().build();
 
@@ -461,6 +735,127 @@ export async function saveMailboxDraft(input: {
       error: error instanceof Error ? error.message : "Failed to save draft",
     };
   }
+}
+
+export async function setMailboxMessageFlagged(
+  id: string,
+  flagged: boolean
+): Promise<CrmMailboxMessage> {
+  const message = await getMailboxMessage(id);
+  if (!message) throw new Error("Message not found.");
+
+  await adminDb().collection(MAILBOX_COLLECTION).doc(id).set(
+    { flagged, syncedAt: new Date().toISOString() },
+    { merge: true }
+  );
+
+  const mailbox = getInfoMailbox();
+  try {
+    await withImapClient(mailbox, async (client) => {
+      const lock = await client.getMailboxLock(message.imapFolder);
+      try {
+        if (flagged) {
+          await client.messageFlagsAdd({ uid: message.uid }, ["\\Flagged"], {
+            uid: true,
+          });
+        } else {
+          await client.messageFlagsRemove({ uid: message.uid }, ["\\Flagged"], {
+            uid: true,
+          });
+        }
+      } finally {
+        lock.release();
+      }
+    });
+  } catch (error) {
+    console.warn("[Mailbox] star flag IMAP failed:", error);
+  }
+
+  return { ...message, flagged };
+}
+
+export async function setMailboxMessageSeen(
+  id: string,
+  seen: boolean
+): Promise<CrmMailboxMessage> {
+  const message = await getMailboxMessage(id);
+  if (!message) throw new Error("Message not found.");
+
+  await adminDb().collection(MAILBOX_COLLECTION).doc(id).set(
+    { seen, syncedAt: new Date().toISOString() },
+    { merge: true }
+  );
+
+  const mailbox = getInfoMailbox();
+  try {
+    await withImapClient(mailbox, async (client) => {
+      const lock = await client.getMailboxLock(message.imapFolder);
+      try {
+        if (seen) {
+          await client.messageFlagsAdd({ uid: message.uid }, ["\\Seen"], {
+            uid: true,
+          });
+        } else {
+          await client.messageFlagsRemove({ uid: message.uid }, ["\\Seen"], {
+            uid: true,
+          });
+        }
+      } finally {
+        lock.release();
+      }
+    });
+  } catch (error) {
+    console.warn("[Mailbox] seen flag IMAP failed:", error);
+  }
+
+  return { ...message, seen };
+}
+
+export async function downloadMailboxAttachment(input: {
+  id: string;
+  index: number;
+}): Promise<{ filename: string; contentType: string; content: Buffer }> {
+  const message = await getMailboxMessage(input.id);
+  if (!message) throw new Error("Message not found.");
+
+  const mailbox = getInfoMailbox();
+  return withImapClient(mailbox, async (client) => {
+    const lock = await client.getMailboxLock(message.imapFolder);
+    try {
+      let source: Buffer | null = null;
+      for await (const msg of client.fetch(
+        String(message.uid),
+        { source: true, uid: true },
+        { uid: true }
+      )) {
+        if (msg.source) {
+          source = Buffer.isBuffer(msg.source)
+            ? msg.source
+            : Buffer.from(msg.source);
+        }
+      }
+      if (!source) throw new Error("Could not load message source from IMAP.");
+
+      const parsed = await simpleParser(source);
+      const attachments = (parsed.attachments || []).filter(
+        (att) => att && !att.related
+      );
+      const att = attachments[input.index];
+      if (!att) throw new Error("Attachment not found.");
+
+      const content = Buffer.isBuffer(att.content)
+        ? att.content
+        : Buffer.from(att.content || []);
+
+      return {
+        filename: String(att.filename || `attachment-${input.index + 1}`),
+        contentType: String(att.contentType || "application/octet-stream"),
+        content,
+      };
+    } finally {
+      lock.release();
+    }
+  });
 }
 
 export function getConfiguredMailboxEmail(): string {

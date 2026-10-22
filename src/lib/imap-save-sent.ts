@@ -15,15 +15,21 @@ type SentCopySmtpConfig = {
 async function buildRawMime(options: {
   from: string;
   to: string;
+  cc?: string;
   subject: string;
   message: string;
+  html?: string;
+  messageId?: string;
   attachments: { filename: string; content: Buffer }[];
 }): Promise<Buffer> {
   const composer = new MailComposer({
     from: options.from,
     to: options.to,
+    ...(options.cc?.trim() ? { cc: options.cc.trim() } : {}),
     subject: options.subject,
     text: options.message,
+    ...(options.html ? { html: options.html } : {}),
+    ...(options.messageId ? { messageId: options.messageId } : {}),
     attachments: options.attachments.map((file) => ({
       filename: file.filename,
       content: file.content,
@@ -50,15 +56,23 @@ async function resolveSentMailboxPath(client: ImapFlow): Promise<string> {
 
 /**
  * Best-effort: copy the outbound message into Hostinger/Titan Sent via IMAP.
- * SMTP alone often does not create a Sent copy for app-based sends.
+ * Skips append when Message-ID is already present (provider auto-filed).
  */
 export async function saveSentCopyViaImap(options: {
   config: SentCopySmtpConfig;
   to: string;
+  cc?: string;
   subject: string;
   message: string;
+  html?: string;
+  messageId?: string;
   attachments: { filename: string; content: Buffer }[];
-}): Promise<{ saved: boolean; path?: string; error?: string }> {
+}): Promise<{
+  saved: boolean;
+  alreadyPresent?: boolean;
+  path?: string;
+  error?: string;
+}> {
   const conn = readImapConnectionFromEnv();
   const mailboxes = readImapMailboxesFromEnv();
   const smtpUser = options.config.user.toLowerCase();
@@ -78,8 +92,11 @@ export async function saveSentCopyViaImap(options: {
   const raw = await buildRawMime({
     from: fromHeader,
     to: options.to,
+    cc: options.cc,
     subject: options.subject,
     message: options.message,
+    html: options.html,
+    messageId: options.messageId,
     attachments: options.attachments,
   });
 
@@ -102,20 +119,38 @@ export async function saveSentCopyViaImap(options: {
     try {
       await client.connect();
       const path = await resolveSentMailboxPath(client);
+
+      if (options.messageId) {
+        const lock = await client.getMailboxLock(path);
+        try {
+          const existing = await client.search(
+            { header: { "message-id": options.messageId } },
+            { uid: true }
+          );
+          if (Array.isArray(existing) && existing.length > 0) {
+            return { saved: false, alreadyPresent: true, path };
+          }
+        } catch {
+          /* search optional — still try append */
+        } finally {
+          lock.release();
+        }
+      }
+
       await client.append(path, raw, ["\\Seen"]);
-      await client.logout().catch(() => undefined);
       return { saved: true, path };
     } catch (error) {
       lastError = error;
+      console.warn(
+        `[IMAP] Save-to-Sent failed on ${host} for ${mailbox.user}:`,
+        error instanceof Error ? error.message : error
+      );
+    } finally {
       try {
         await client.logout();
       } catch {
         /* ignore */
       }
-      console.warn(
-        `[IMAP] Save-to-Sent failed on ${host} for ${mailbox.user}:`,
-        error instanceof Error ? error.message : error
-      );
     }
   }
 

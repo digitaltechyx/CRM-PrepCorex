@@ -1,4 +1,17 @@
-export type MailboxFolderKey = "inbox" | "sent" | "drafts" | "spam";
+export type MailboxFolderKey =
+  | "inbox"
+  | "drafts"
+  | "scheduled"
+  | "sent"
+  | "spam"
+  | "trash";
+
+export type CrmMailboxAttachmentMeta = {
+  index: number;
+  filename: string;
+  contentType: string;
+  size: number;
+};
 
 export type CrmMailboxMessage = {
   id: string;
@@ -8,6 +21,7 @@ export type CrmMailboxMessage = {
   imapFolder: string;
   uid: number;
   messageId?: string;
+  inReplyTo?: string;
   subject: string;
   from: string;
   fromName?: string;
@@ -21,6 +35,7 @@ export type CrmMailboxMessage = {
   seen: boolean;
   flagged: boolean;
   hasAttachments: boolean;
+  attachments?: CrmMailboxAttachmentMeta[];
   syncedAt?: string;
 };
 
@@ -41,7 +56,27 @@ export const MAILBOX_FOLDERS: Array<{
   label: string;
 }> = [
   { key: "inbox", label: "Inbox" },
-  { key: "sent", label: "Sent" },
   { key: "drafts", label: "Drafts" },
+  { key: "scheduled", label: "Scheduled" },
+  { key: "sent", label: "Sent" },
   { key: "spam", label: "Spam" },
+  { key: "trash", label: "Trash" },
+];
+
+/** IMAP-backed folders (Scheduled is CRM-local). */
+export const MAILBOX_IMAP_FOLDER_KEYS = [
+  "inbox",
+  "sent",
+  "drafts",
+  "spam",
+  "trash",
+] as const;
+
+export const MAILBOX_FOLDER_KEYS: MailboxFolderKey[] = [
+  "inbox",
+  "drafts",
+  "scheduled",
+  "sent",
+  "spam",
+  "trash",
 ];

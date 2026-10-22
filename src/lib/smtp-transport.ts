@@ -70,14 +70,19 @@ function isAuthFailure(error: unknown): boolean {
 export async function sendSmtpMail(options: {
   config: SmtpConfig;
   to: string;
+  cc?: string;
   subject: string;
   message: string;
+  html?: string;
   attachments: { filename: string; content: Buffer }[];
 }) {
-  const { config, to, subject, message, attachments } = options;
+  const { config, to, cc, subject, message, html, attachments } = options;
   const from = config.fromName
     ? `${config.fromName} <${config.from}>`
     : config.from;
+  const messageId = `<crm.${Date.now()}.${Math.random()
+    .toString(36)
+    .slice(2, 10)}@prepservicesfba.com>`;
 
   let lastError: unknown;
   for (const host of hostFallbacks(config.host)) {
@@ -86,26 +91,40 @@ export async function sendSmtpMail(options: {
       await transporter.sendMail({
         from,
         to,
+        ...(cc?.trim() ? { cc: cc.trim() } : {}),
         subject,
         text: message,
+        ...(html ? { html } : {}),
+        messageId,
         attachments,
       });
 
       // Hostinger/Titan often does not auto-file app SMTP sends into Sent.
+      // Skip IMAP append if Message-ID already exists (avoids double Sent copies).
       const sentCopy = await saveSentCopyViaImap({
         config,
         to,
+        cc,
         subject,
         message,
+        html,
+        messageId,
         attachments,
       });
-      if (!sentCopy.saved) {
+      if (!sentCopy.saved && !sentCopy.alreadyPresent) {
         console.warn("[SMTP] Sent copy not saved to Hostinger:", sentCopy.error);
       } else {
-        console.log(`[SMTP] Sent copy saved to IMAP folder: ${sentCopy.path}`);
+        console.log(
+          `[SMTP] Sent copy ${sentCopy.alreadyPresent ? "already in" : "saved to"} IMAP: ${sentCopy.path}`
+        );
       }
 
-      return { host, sentSaved: sentCopy.saved, sentPath: sentCopy.path };
+      return {
+        host,
+        messageId,
+        sentSaved: sentCopy.saved || Boolean(sentCopy.alreadyPresent),
+        sentPath: sentCopy.path,
+      };
     } catch (error) {
       lastError = error;
       const hasMoreHosts = host !== hostFallbacks(config.host).at(-1);

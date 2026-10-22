@@ -19,7 +19,7 @@ export async function POST(
   try {
     const body = await request.json();
     const targetFolder = String(body?.targetFolder || "") as MailboxFolderKey;
-    if (!["inbox", "sent", "drafts", "spam"].includes(targetFolder)) {
+    if (!["inbox", "sent", "drafts", "spam", "trash"].includes(targetFolder)) {
       return NextResponse.json({ error: "Invalid targetFolder" }, { status: 400 });
     }
     const message = await moveMailboxMessage({

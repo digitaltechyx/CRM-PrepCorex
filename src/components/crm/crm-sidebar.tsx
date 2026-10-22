@@ -15,6 +15,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import { brandLogoSrc } from "@/components/logo";
 const nav = [
   { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { title: "Leads", href: "/dashboard/leads", icon: Users },
+  { title: "Mailbox", href: "/dashboard/mailbox", icon: Mail },
   { title: "Address book", href: "/dashboard/contacts", icon: BookUser },
   { title: "Spam", href: "/dashboard/spam", icon: ShieldAlert },
   { title: "Pipeline", href: "/dashboard/settings/pipeline", icon: Columns3 },
@@ -45,31 +47,31 @@ function NavLinks({
   const pathname = usePathname();
 
   return (
-    <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
-      {nav.map((item) => {
-        const Icon = item.icon;
-        const active =
-          item.href === "/dashboard"
-            ? pathname === "/dashboard"
-            : pathname === item.href || pathname.startsWith(item.href + "/");
-        return (
+      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
+        {nav.map((item) => {
+          const Icon = item.icon;
+          const active =
+            item.href === "/dashboard"
+              ? pathname === "/dashboard"
+              : pathname === item.href || pathname.startsWith(item.href + "/");
+          return (
           <Link key={item.href} href={item.href} onClick={onNavigate} title={item.title}>
-            <span
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+              <span
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                 collapsed && "justify-center px-2",
-                active
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-            >
-              <Icon className="h-5 w-5 shrink-0" />
+                  active
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                <Icon className="h-5 w-5 shrink-0" />
               {!collapsed ? <span className="truncate">{item.title}</span> : null}
-            </span>
-          </Link>
-        );
-      })}
-    </nav>
+              </span>
+            </Link>
+          );
+        })}
+      </nav>
   );
 }
 
@@ -106,7 +108,7 @@ function SidebarFooter({
   onNavigate?: () => void;
 }) {
   return (
-    <div className="border-t p-3">
+      <div className="border-t p-3">
       <Button
         variant="ghost"
         className={cn("w-full gap-2", collapsed ? "justify-center px-2" : "justify-start")}
@@ -216,10 +218,10 @@ export function CrmSidebar() {
                 <span>Minimize</span>
               </>
             )}
-          </Button>
-        </div>
+        </Button>
+      </div>
         <SidebarFooter collapsed={collapsed} onSignOut={handleSignOut} />
-      </aside>
+    </aside>
     </>
   );
 }

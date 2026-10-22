@@ -46,6 +46,7 @@
     "jspdf": "^3.0.3",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.475.0",
+    "mailparser": "^3.12.2",
     "next": "15.5.7",
     "nodemailer": "^7.0.12",
     "pdf-lib": "^1.17.1",
@@ -62,6 +63,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^20",
     "@types/nodemailer": "^7.0.5",
     "@types/qrcode": "^1.5.6",

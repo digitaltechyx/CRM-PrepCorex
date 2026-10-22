@@ -176,7 +176,7 @@ export function LexiDashboardPanel() {
               </div>
               <p className="mt-0.5 max-w-xl text-sm text-slate-600">
                 Notices for drafts, leads, and follow-ups. Chat anytime with the floating Lexi button
-                (bottom-right). Auto-runs every 3 hours.
+                (bottom-right). Auto-runs every 3 hours via Firebase.
               </p>
               <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1 ring-1 ring-slate-200">

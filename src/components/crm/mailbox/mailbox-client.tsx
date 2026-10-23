@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -135,6 +136,12 @@ export function MailboxClient() {
     message: "",
   });
 
+  /** Always the folder currently shown — sync must reload this, not a stale closure. */
+  const folderRef = useRef<MailboxFolderKey>(folder);
+  folderRef.current = folder;
+  /** Ignore out-of-order list responses (sync vs tab change races). */
+  const loadSeqRef = useRef(0);
+
   const ourEmail = mailboxEmail.toLowerCase();
 
   const authHeaders = useCallback(async (): Promise<HeadersInit> => {
@@ -147,9 +154,14 @@ export function MailboxClient() {
   }, [user]);
 
   const loadMessages = useCallback(
-    async (nextFolder: MailboxFolderKey = folder) => {
+    async (
+      nextFolder: MailboxFolderKey = folderRef.current,
+      opts?: { soft?: boolean }
+    ) => {
       if (!user) return;
-      setLoading(true);
+      const seq = ++loadSeqRef.current;
+      const soft = Boolean(opts?.soft);
+      if (!soft) setLoading(true);
       try {
         const headers = await authHeaders();
         if (nextFolder === "scheduled") {
@@ -185,6 +197,8 @@ export function MailboxClient() {
               hasAttachments: Boolean(m.hasAttachments),
             })
           );
+          if (seq !== loadSeqRef.current) return;
+          if (nextFolder !== folderRef.current) return;
           setMessages(mapped);
         } else {
           const res = await fetch(
@@ -193,20 +207,23 @@ export function MailboxClient() {
           );
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || "Failed to load messages");
+          if (seq !== loadSeqRef.current) return;
+          if (nextFolder !== folderRef.current) return;
           setMailboxEmail(String(data.mailboxEmail || mailboxEmail));
           setMessages(Array.isArray(data.messages) ? data.messages : []);
         }
       } catch (error) {
+        if (seq !== loadSeqRef.current) return;
         toast({
           variant: "destructive",
           title: "Could not load mailbox",
           description: error instanceof Error ? error.message : "Try sync again.",
         });
       } finally {
-        setLoading(false);
+        if (seq === loadSeqRef.current && !soft) setLoading(false);
       }
     },
-    [authHeaders, folder, mailboxEmail, toast, user]
+    [authHeaders, mailboxEmail, toast, user]
   );
 
   const syncMailbox = useCallback(async () => {
@@ -230,7 +247,8 @@ export function MailboxClient() {
         )
         .join(" · ");
       toast({ title: "Mailbox synced", description: summary || "Done" });
-      await loadMessages(folder);
+      // Reload whatever tab the admin is on now (not the folder from when sync started).
+      await loadMessages(folderRef.current, { soft: true });
     } catch (error) {
       toast({
         variant: "destructive",
@@ -240,7 +258,7 @@ export function MailboxClient() {
     } finally {
       setSyncing(false);
     }
-  }, [authHeaders, folder, loadMessages, toast, user]);
+  }, [authHeaders, loadMessages, toast, user]);
 
   useEffect(() => {
     void loadMessages(folder);

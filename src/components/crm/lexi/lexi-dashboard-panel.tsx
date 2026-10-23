@@ -135,7 +135,7 @@ export function LexiDashboardPanel() {
       await loadNotices();
       toast({
         title: "Lexi finished a pass",
-        description: `Drafts: ${data.drafts?.drafted ?? 0} · Lead notes: ${data.briefing?.posted ?? 0}`,
+        description: `Drafts: ${data.drafts?.drafted ?? 0} · CRM tips: ${data.briefing?.posted ?? 0}`,
       });
     } catch (error) {
       toast({
@@ -149,8 +149,16 @@ export function LexiDashboardPanel() {
   };
 
   const draftReady = messages.filter((m) => m.type === "draft_ready" && !m.read).length;
-  const leadActions = messages.filter(
-    (m) => (m.type === "lead_action" || m.type === "lead_suggestion") && !m.read
+  const crmTips = messages.filter(
+    (m) =>
+      !m.read &&
+      (m.type === "lead_action" ||
+        m.type === "lead_suggestion" ||
+        m.type === "crm_briefing" ||
+        m.type === "quote_tip" ||
+        m.type === "invoice_tip" ||
+        m.type === "address_book" ||
+        m.type === "mailbox_tip")
   ).length;
 
   return (
@@ -175,8 +183,8 @@ export function LexiDashboardPanel() {
                 ) : null}
               </div>
               <p className="mt-0.5 max-w-xl text-sm text-slate-600">
-                Notices for drafts, leads, and follow-ups. Chat anytime with the floating Lexi button
-                (bottom-right). Auto-runs every 3 hours via Firebase.
+                Tips across leads, mailbox, address book, quotes, and invoices. Chat with the floating
+                Lexi button (bottom-right) — CRM writes need your Confirm. Auto-runs every 3 hours.
               </p>
               <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1 ring-1 ring-slate-200">
@@ -185,7 +193,7 @@ export function LexiDashboardPanel() {
                 </span>
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1 ring-1 ring-slate-200">
                   <MessageCircle className="h-3 w-3 text-[#6c47ff]" />
-                  {leadActions} lead tip{leadActions === 1 ? "" : "s"}
+                  {crmTips} CRM tip{crmTips === 1 ? "" : "s"}
                 </span>
               </div>
             </div>
@@ -223,8 +231,8 @@ export function LexiDashboardPanel() {
           <div className="max-h-[340px] space-y-2 overflow-y-auto rounded-xl bg-white/60 p-2 ring-1 ring-slate-100">
             {messages.length === 0 ? (
               <div className="px-3 py-8 text-center text-sm text-slate-500">
-                No messages yet. Click <strong>Run Lexi</strong> to scan inbox drafts and leads — or
-                open the floating chat button to talk with Lexi.
+                No messages yet. Click <strong>Run Lexi</strong> to scan drafts, leads, quotes, and
+                invoices — or open the floating chat to talk with Lexi.
               </div>
             ) : (
               messages.map((msg) => (

@@ -4,8 +4,8 @@ import { adminDb } from "@/lib/firebase-admin";
 import { lexiChatCompletion } from "@/lib/lexi/openai";
 import { LEXI_SYSTEM_PROMPT } from "@/lib/lexi/prompt";
 import { LEXI_CHAT_COLLECTION, type LexiChatMessage } from "@/lib/lexi/types";
-import { listLexiMessages } from "@/lib/lexi/messages";
-import { CRM_LEADS_COLLECTION } from "@/lib/crm/types";
+import { buildCrmSnapshotForLexi } from "@/lib/lexi/crm-snapshot";
+import { extractLexiAction } from "@/lib/lexi/actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -35,27 +35,6 @@ async function saveChat(uid: string, role: "user" | "assistant", content: string
   };
   await ref.set(doc);
   return doc;
-}
-
-async function buildContextBlock(): Promise<string> {
-  const [leadsSnap, unread] = await Promise.all([
-    adminDb().collection(CRM_LEADS_COLLECTION).limit(25).get(),
-    listLexiMessages({ limit: 8, unreadOnly: true }),
-  ]);
-  const leads = leadsSnap.docs
-    .map((d) => {
-      const x = d.data();
-      return `- ${x.leadName || d.id} | ${x.status || "?"} | followUp=${x.nextFollowUpAt || "—"}`;
-    })
-    .join("\n");
-  const notes = unread
-    .map((m) => `- [${m.type}] ${m.title}`)
-    .join("\n");
-  return [
-    "Live CRM snapshot (may be incomplete):",
-    leads ? `Leads sample:\n${leads}` : "Leads: (none loaded)",
-    notes ? `Unread Lexi notices for admin:\n${notes}` : "No unread Lexi notices.",
-  ].join("\n\n");
 }
 
 export async function GET(request: NextRequest) {
@@ -89,12 +68,15 @@ export async function POST(request: NextRequest) {
 
     await saveChat(auth.uid, "user", text);
     const history = await loadRecentChat(auth.uid, 16);
-    const context = await buildContextBlock();
+    const snapshot = await buildCrmSnapshotForLexi();
 
-    const reply = await lexiChatCompletion({
+    const rawReply = await lexiChatCompletion({
       messages: [
         { role: "system", content: LEXI_SYSTEM_PROMPT },
-        { role: "system", content: context },
+        {
+          role: "system",
+          content: `${snapshot}\n\nAnswer using this snapshot. For totals, prefer TOTAL lines and status counts over listing every name unless the admin asks for a full list.`,
+        },
         ...history
           .filter((m) => m.role === "user" || m.role === "assistant")
           .map((m) => ({
@@ -102,12 +84,22 @@ export async function POST(request: NextRequest) {
             content: m.content,
           })),
       ],
-      temperature: 0.65,
-      maxTokens: 1600,
+      temperature: 0.4,
+      maxTokens: 2000,
     });
 
-    const assistant = await saveChat(auth.uid, "assistant", reply);
-    return NextResponse.json({ success: true, reply: assistant });
+    const { text: cleanReply, pendingAction } = extractLexiAction(rawReply);
+    const assistant = await saveChat(
+      auth.uid,
+      "assistant",
+      cleanReply || rawReply
+    );
+
+    return NextResponse.json({
+      success: true,
+      reply: assistant,
+      pendingAction: pendingAction || null,
+    });
   } catch (error) {
     console.error("[Lexi chat]", error);
     return NextResponse.json(

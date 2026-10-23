@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Loader2, Send, Sparkles, X } from "lucide-react";
+import { Check, Eraser, Loader2, Send, Sparkles, X } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,6 +38,7 @@ export function LexiFloatingChat() {
     null
   );
   const [executing, setExecuting] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadedRef = useRef(false);
 
@@ -171,6 +172,49 @@ export function LexiFloatingChat() {
     }
   };
 
+  const welcomeMessage = useCallback((): LexiChatMessage => {
+    return {
+      id: "welcome",
+      uid: user?.uid || "local",
+      role: "assistant",
+      content: WELCOME,
+      createdAt: new Date().toISOString(),
+      createdAtMs: Date.now(),
+    };
+  }, [user?.uid]);
+
+  const clearChat = async () => {
+    if (!user || clearing || sending) return;
+    setClearing(true);
+    setPendingAction(null);
+    try {
+      const headers = await authHeaders();
+      const res = await fetch("/api/lexi/chat", {
+        method: "DELETE",
+        headers,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to clear chat");
+      setMessages([welcomeMessage()]);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `clear_err_${Date.now()}`,
+          uid: user.uid,
+          role: "assistant",
+          content: `Could not clear chat: ${
+            error instanceof Error ? error.message : "Try again"
+          }`,
+          createdAt: new Date().toISOString(),
+          createdAtMs: Date.now(),
+        },
+      ]);
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const confirmAction = async () => {
     if (!pendingAction || !user || executing) return;
     setExecuting(true);
@@ -244,15 +288,35 @@ export function LexiFloatingChat() {
                 </p>
               </div>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-white hover:bg-[#5b38f0]"
-              onClick={() => setOpen(false)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-white hover:bg-[#5b38f0]"
+                disabled={clearing || sending || loadingHistory}
+                onClick={() => void clearChat()}
+                title="Clear chat"
+                aria-label="Clear chat"
+              >
+                {clearing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Eraser className="h-4 w-4" />
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-white hover:bg-[#5b38f0]"
+                onClick={() => setOpen(false)}
+                title="Close"
+                aria-label="Close Lexi chat"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
 
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">

@@ -53,6 +53,37 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/** Clear this admin's Lexi chat history. */
+export async function DELETE(request: NextRequest) {
+  const auth = await requireMailboxAdmin(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+  try {
+    const snap = await adminDb()
+      .collection(LEXI_CHAT_COLLECTION)
+      .where("uid", "==", auth.uid)
+      .limit(400)
+      .get();
+    const batchSize = 400;
+    let deleted = 0;
+    for (let i = 0; i < snap.docs.length; i += batchSize) {
+      const batch = adminDb().batch();
+      const chunk = snap.docs.slice(i, i + batchSize);
+      for (const d of chunk) batch.delete(d.ref);
+      await batch.commit();
+      deleted += chunk.length;
+    }
+    return NextResponse.json({ success: true, deleted });
+  } catch (error) {
+    console.error("[Lexi chat clear]", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to clear chat" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(request: NextRequest) {
   const auth = await requireMailboxAdmin(request);
   if (!auth.ok) {

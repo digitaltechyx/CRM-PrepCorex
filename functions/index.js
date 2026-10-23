@@ -1,17 +1,14 @@
 const functions = require("firebase-functions/v1");
-const admin = require("firebase-admin");
-
-admin.initializeApp();
 
 const TZ_NEW_JERSEY = "America/New_York";
 
 /**
  * Lexi CRM automation every 3 hours.
- * Calls this CRM app's /api/lexi/cron (Vercel Hobby cannot run sub-daily crons).
+ * Calls CRM /api/lexi/cron (Vercel Hobby cannot run sub-daily crons).
  *
- * Firebase Functions env (same project as PrepCorex / StockFlow):
- *   CRON_SECRET or LEXI_CRON_SECRET  — must match CRM Vercel CRON_SECRET
- *   LEXI_CRON_URL (optional)         — default https://crm.prepservicesfba.com/api/lexi/cron
+ * Env (functions/.env at deploy time, or Cloud Functions env):
+ *   CRON_SECRET or LEXI_CRON_SECRET
+ *   LEXI_CRON_URL (optional) — default https://crm.prepservicesfba.com/api/lexi/cron
  */
 exports.runCrmLexiCron = functions
   .runWith({ timeoutSeconds: 120, memory: "256MB" })

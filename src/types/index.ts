@@ -548,13 +548,6 @@ export interface LabelPurchase {
   shippedItemId?: string;
 }
 
-  paidAt?: Date | {
-    seconds: number;
-    nanoseconds: number;
-  } | string;
-  paidBy?: string; // Admin user ID who marked as paid
-}
-
 export interface AuthContextType {
   user: FirebaseUser | null;
   userProfile: UserProfile | null;
@@ -628,13 +621,6 @@ export interface LabelPurchase {
   shippedItemId?: string;
 }
 
-  paidAt?: Date | {
-    seconds: number;
-    nanoseconds: number;
-  } | string;
-  paidBy?: string; // Admin user ID who marked as paid
-}
-
 export interface AuthContextType {
   user: FirebaseUser | null;
   userProfile: UserProfile | null;
@@ -706,13 +692,6 @@ export interface LabelPurchase {
   paymentCompletedAt?: Date;
   labelPurchasedAt?: Date;
   shippedItemId?: string;
-}
-
-  paidAt?: Date | {
-    seconds: number;
-    nanoseconds: number;
-  } | string;
-  paidBy?: string; // Admin user ID who marked as paid
 }
 
 export interface AuthContextType {

@@ -16,6 +16,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Mail,
+  StickyNote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import { brandLogoSrc } from "@/components/logo";
 
 const nav = [
   { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
+  { title: "My notes & to-do", href: "/dashboard/tasks", icon: StickyNote },
   { title: "Leads", href: "/dashboard/leads", icon: Users },
   { title: "Mailbox", href: "/dashboard/mailbox", icon: Mail },
   { title: "Address book", href: "/dashboard/contacts", icon: BookUser },

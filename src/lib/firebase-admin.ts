@@ -5,8 +5,9 @@ let admin: typeof import('firebase-admin') | null = null;
 let adminDbInstance: any = null;
 let adminFieldValueInstance: any = null;
 let adminAuthInstance: any = null;
+let adminMessagingInstance: any = null;
 
-function getAdmin() {
+function getAdmin(): NonNullable<typeof admin> {
   if (typeof window !== 'undefined') {
     throw new Error('Firebase Admin SDK can only be used on the server side');
   }
@@ -16,7 +17,7 @@ function getAdmin() {
     admin = require('firebase-admin');
   }
   
-  return admin;
+  return admin!;
 }
 
 function initializeAdmin() {
@@ -92,7 +93,21 @@ export function getAdminAuth() {
   return adminAuthInstance;
 }
 
+export function getAdminMessaging() {
+  if (!adminMessagingInstance) {
+    initializeAdmin();
+    const adminModule = getAdmin();
+    adminMessagingInstance = adminModule.messaging();
+  }
+  return adminMessagingInstance;
+}
+
 // Export getters for lazy initialization (only called when API routes run)
 // Use getAdminDb() and getAdminFieldValue() in API routes instead of direct exports
-export { getAdminDb as adminDb, getAdminFieldValue as adminFieldValue, getAdminAuth as adminAuth };
+export {
+  getAdminDb as adminDb,
+  getAdminFieldValue as adminFieldValue,
+  getAdminAuth as adminAuth,
+  getAdminMessaging as adminMessaging,
+};
 

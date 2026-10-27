@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { CrmDashboardAnalytics } from "@/components/crm/dashboard/crm-dashboard-analytics";
 import { CrmDashboardLeadWidgets } from "@/components/crm/leads/crm-dashboard-lead-widgets";
 import { LexiDashboardPanel } from "@/components/crm/lexi/lexi-dashboard-panel";
+import { PersonalTaskDashboardCard } from "@/components/crm/tasks/personal-task-dashboard-card";
 import { Users, BookUser, Briefcase, Receipt, LayoutDashboard } from "lucide-react";
 
 const modules = [
@@ -51,6 +52,8 @@ export default function CrmDashboardHomePage() {
           a module to work leads, proposals, or invoices.
         </p>
       </header>
+
+      <PersonalTaskDashboardCard />
 
       <LexiDashboardPanel />
 

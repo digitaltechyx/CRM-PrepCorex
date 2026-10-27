@@ -1,21 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addDoc,
   collection,
@@ -25,13 +10,11 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import {
-  Archive,
   Bell,
   BellRing,
   CalendarClock,
   Check,
   CheckCircle2,
-  ChevronDown,
   Circle,
   Clock3,
   GripVertical,
@@ -39,6 +22,7 @@ import {
   ListFilter,
   Loader2,
   MoreHorizontal,
+  Move,
   Pencil,
   Plus,
   RotateCcw,
@@ -65,8 +49,10 @@ import {
   type PersonalTaskStatus,
 } from "@/lib/personal-tasks";
 import {
-  currentNotificationPermission,
   enableCrmPushNotifications,
+  hasCrmPushDeviceRegistered,
+  listenForCrmForegroundMessages,
+  vapidKeyConfigured,
 } from "@/lib/crm-push-notifications";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -138,6 +124,33 @@ const FILTERS: Array<{ id: TaskFilter; label: string }> = [
   { id: "all", label: "All" },
 ];
 
+const NOTE_WIDTH = 260;
+const NOTE_MIN_HEIGHT = 220;
+const BOARD_PADDING = 16;
+const BOARD_MIN_HEIGHT = 560;
+
+function defaultBoardPosition(index: number): { x: number; y: number } {
+  const col = index % 3;
+  const row = Math.floor(index / 3);
+  return {
+    x: BOARD_PADDING + col * (NOTE_WIDTH + 28) + (row % 2) * 18,
+    y: BOARD_PADDING + row * (NOTE_MIN_HEIGHT + 28) + (col % 2) * 12,
+  };
+}
+
+function noteTilt(taskId: string): number {
+  let hash = 0;
+  for (let i = 0; i < taskId.length; i += 1) hash = (hash + taskId.charCodeAt(i) * (i + 1)) % 11;
+  return hash - 5;
+}
+
+function resolveBoardPosition(task: PersonalTask, index: number): { x: number; y: number } {
+  if (typeof task.boardX === "number" && typeof task.boardY === "number") {
+    return { x: task.boardX, y: task.boardY };
+  }
+  return defaultBoardPosition(index);
+}
+
 function dateTimeLabel(value?: string | null): string {
   const date = taskDate(value);
   if (!date) return "No date";
@@ -166,8 +179,14 @@ function priorityClass(priority: PersonalTaskPriority): string {
   return "border-blue-200 bg-blue-50 text-blue-700";
 }
 
-function SortableStickyNote({
+function FreeStickyNote({
   task,
+  x,
+  y,
+  zIndex,
+  isDragging,
+  onPointerDown,
+  onContentClick,
   onComplete,
   onEdit,
   onDelete,
@@ -175,29 +194,43 @@ function SortableStickyNote({
   onReopen,
 }: {
   task: PersonalTask;
+  x: number;
+  y: number;
+  zIndex: number;
+  isDragging: boolean;
+  onPointerDown: (event: PointerEvent, taskId: string) => void;
+  onContentClick: (task: PersonalTask) => void;
   onComplete: (task: PersonalTask) => void;
   onEdit: (task: PersonalTask) => void;
   onDelete: (task: PersonalTask) => void;
   onSnooze: (task: PersonalTask, minutes: number) => void;
   onReopen: (task: PersonalTask) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: task.id,
-  });
   const overdue = isTaskOverdue(task);
   const completed = task.status === "completed";
   const color = TASK_COLORS[task.color] ?? TASK_COLORS.sun;
+  const tilt = noteTilt(task.id);
 
   return (
     <article
-      ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      data-sticky-note
+      onPointerDown={(event) => onPointerDown(event.nativeEvent, task.id)}
+      style={{
+        left: x,
+        top: y,
+        width: NOTE_WIDTH,
+        zIndex,
+        transform: isDragging
+          ? `rotate(${tilt * 0.2}deg) scale(1.05)`
+          : `rotate(${tilt * 0.35}deg)`,
+      }}
       className={cn(
-        "group relative flex min-h-[220px] flex-col overflow-hidden rounded-[1.35rem] border p-4 text-slate-900 shadow-[0_14px_40px_-24px_rgba(15,23,42,0.45)] ring-1 ring-white/70 transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_24px_50px_-25px_rgba(15,23,42,0.45)] sm:p-5",
+        "group absolute flex min-h-[220px] touch-none select-none flex-col overflow-hidden rounded-[1.25rem] border p-4 text-slate-900 shadow-[0_18px_40px_-22px_rgba(15,23,42,0.5)] ring-1 ring-white/70 transition-[box-shadow,transform] duration-150 sm:p-5",
+        "cursor-grab active:cursor-grabbing",
         color.card,
         overdue && "ring-2 ring-red-400/70",
         completed && "opacity-75 grayscale-[.15]",
-        isDragging && "z-30 scale-[1.03] rotate-1 opacity-90 shadow-2xl"
+        isDragging && "shadow-2xl ring-2 ring-indigo-400/50"
       )}
     >
       <div
@@ -214,15 +247,10 @@ function SortableStickyNote({
         }}
       />
       <div className="flex items-start justify-between gap-2">
-        <button
-          type="button"
-          className="mt-0.5 cursor-grab touch-none rounded-md p-1 text-slate-500/70 opacity-70 transition hover:bg-white/60 hover:text-slate-800 active:cursor-grabbing sm:opacity-0 sm:group-hover:opacity-100"
-          aria-label="Drag to reorder"
-          {...attributes}
-          {...listeners}
-        >
-          <GripVertical className="h-5 w-5" />
-        </button>
+        <div className="mt-0.5 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-slate-500/80">
+          <GripVertical className="h-4 w-4" />
+          <Move className="h-3.5 w-3.5 opacity-70" />
+        </div>
         <div className="flex flex-wrap justify-end gap-1.5">
           <Badge variant="outline" className={cn("text-[10px] uppercase", priorityClass(task.priority))}>
             {PRIORITY_LABELS[task.priority]}
@@ -235,8 +263,8 @@ function SortableStickyNote({
 
       <button
         type="button"
-        onClick={() => onEdit(task)}
-        className="mt-3 min-w-0 flex-1 text-left"
+        onClick={() => onContentClick(task)}
+        className="mt-3 min-w-0 flex-1 cursor-inherit text-left"
       >
         <h3
           className={cn(
@@ -269,12 +297,16 @@ function SortableStickyNote({
         </div>
       ) : null}
 
-      <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-900/10 pt-3">
+      <div
+        data-note-actions
+        className="mt-4 flex items-center justify-between gap-2 border-t border-slate-900/10 pt-3 touch-auto"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
         <div className={cn("flex min-w-0 items-center gap-1.5 text-xs font-semibold", overdue ? "text-red-700" : "text-slate-600")}>
           <CalendarClock className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">{dateTimeLabel(task.dueAt)}</span>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1 touch-auto">
           {completed ? (
             <Button
               size="icon"
@@ -335,9 +367,22 @@ function SortableStickyNote({
   );
 }
 
+type DragState = {
+  taskId: string;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+  pointerId: number;
+  moved: boolean;
+};
+
 export function PersonalTaskBoard() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const suppressClickRef = useRef<string | null>(null);
   const [tasks, setTasks] = useState<PersonalTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -346,10 +391,11 @@ export function PersonalTaskBoard() {
   const [filter, setFilter] = useState<TaskFilter>("current");
   const [priorityFilter, setPriorityFilter] = useState<PersonalTaskPriority | "all">("all");
   const [search, setSearch] = useState("");
-  const [notificationPermission, setNotificationPermission] = useState<
-    NotificationPermission | "unsupported"
-  >("default");
+  const [pushReady, setPushReady] = useState(false);
   const [enablingNotifications, setEnablingNotifications] = useState(false);
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [boardWidth, setBoardWidth] = useState(900);
 
   const taskCollection = useMemo(
     () => (user ? collection(db, "users", user.uid, "personalTasks") : null),
@@ -357,8 +403,22 @@ export function PersonalTaskBoard() {
   );
 
   useEffect(() => {
-    setNotificationPermission(currentNotificationPermission());
+    setPushReady(hasCrmPushDeviceRegistered());
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let unsubscribe = () => undefined;
+    void listenForCrmForegroundMessages((payload) => {
+      toast({
+        title: payload.title,
+        description: payload.body,
+      });
+    }).then((stop) => {
+      unsubscribe = stop;
+    });
+    return () => unsubscribe();
+  }, [toast, user]);
 
   useEffect(() => {
     if (!taskCollection) return;
@@ -371,6 +431,17 @@ export function PersonalTaskBoard() {
         }));
         rows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         setTasks(rows);
+        setPositions((current) => {
+          const next: Record<string, { x: number; y: number }> = {};
+          rows.forEach((task, index) => {
+            if (dragRef.current?.taskId === task.id && current[task.id]) {
+              next[task.id] = current[task.id];
+              return;
+            }
+            next[task.id] = resolveBoardPosition(task, index);
+          });
+          return next;
+        });
         setLoading(false);
       },
       (error) => {
@@ -396,48 +467,6 @@ export function PersonalTaskBoard() {
     },
     [user]
   );
-
-  useEffect(() => {
-    if (!user || !tasks.length) return;
-    const run = async () => {
-      const now = Date.now();
-      for (const task of tasks) {
-        if (
-          !task.notificationPending ||
-          task.status === "completed" ||
-          task.status === "archived"
-        ) {
-          continue;
-        }
-        const reminder = taskDate(task.reminderAt || task.dueAt);
-        if (!reminder || reminder.getTime() > now) continue;
-        let displayed = false;
-        if (Notification.permission === "granted" && "serviceWorker" in navigator) {
-          const registration = await navigator.serviceWorker.ready.catch(() => null);
-          if (registration) {
-            await registration.showNotification(`Due now: ${task.title}`, {
-              body: task.notes || "Your personal CRM task is ready.",
-              icon: "/PCX Testing-11.svg",
-              badge: "/PCX Testing-11.svg",
-              tag: `crm-task-${task.id}`,
-              requireInteraction: task.priority === "urgent",
-              data: { url: `/dashboard/tasks?task=${task.id}`, taskId: task.id },
-            });
-            displayed = true;
-          }
-        }
-        if (displayed) {
-          await updateTask(task.id, {
-            notificationPending: false,
-            reminderSentAt: new Date().toISOString(),
-          });
-        }
-      }
-    };
-    void run();
-    const timer = window.setInterval(() => void run(), 30_000);
-    return () => window.clearInterval(timer);
-  }, [tasks, updateTask, user]);
 
   useEffect(() => {
     if (!user || typeof window === "undefined") return;
@@ -488,9 +517,115 @@ export function PersonalTaskBoard() {
     });
   }, [filter, priorityFilter, search, tasks]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  const boardHeight = useMemo(() => {
+    const maxY = visibleTasks.reduce((max, task, index) => {
+      const point = positions[task.id] ?? resolveBoardPosition(task, index);
+      return Math.max(max, point.y + NOTE_MIN_HEIGHT + BOARD_PADDING);
+    }, BOARD_MIN_HEIGHT);
+    return Math.max(BOARD_MIN_HEIGHT, maxY);
+  }, [positions, visibleTasks]);
+
+  const nextCreatePosition = useCallback(() => {
+    const occupied = Object.values(positions);
+    if (!occupied.length) return defaultBoardPosition(0);
+    const maxY = Math.max(...occupied.map((point) => point.y));
+    const bottomRow = occupied.filter((point) => Math.abs(point.y - maxY) < 40);
+    const lastX = Math.max(...bottomRow.map((point) => point.x));
+    const nextX = lastX + NOTE_WIDTH + 28;
+    if (nextX + NOTE_WIDTH < Math.max(boardWidth, 360) - BOARD_PADDING) {
+      return { x: nextX, y: maxY + ((bottomRow.length % 2) * 10) };
+    }
+    return { x: BOARD_PADDING, y: maxY + NOTE_MIN_HEIGHT + 28 };
+  }, [boardWidth, positions]);
+
+  const clampPosition = useCallback(
+    (x: number, y: number) => {
+      const maxX = Math.max(BOARD_PADDING, boardWidth - NOTE_WIDTH - BOARD_PADDING);
+      return {
+        x: Math.min(Math.max(BOARD_PADDING, x), maxX),
+        y: Math.max(BOARD_PADDING, y),
+      };
+    },
+    [boardWidth]
   );
+
+  const handleNotePointerDown = useCallback(
+    (event: PointerEvent, taskId: string) => {
+      if (event.button !== 0) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "[data-note-actions], [role='menuitem'], [data-radix-collection-item], input, textarea, a"
+        )
+      ) {
+        return;
+      }
+      const origin = positions[taskId] ?? defaultBoardPosition(0);
+      dragRef.current = {
+        taskId,
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: origin.x,
+        originY: origin.y,
+        pointerId: event.pointerId,
+        moved: false,
+      };
+      setDraggingId(taskId);
+      suppressClickRef.current = null;
+    },
+    [positions]
+  );
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      const next = clampPosition(drag.originX + dx, drag.originY + dy);
+      setPositions((current) => ({ ...current, [drag.taskId]: next }));
+    };
+
+    const onUp = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const next = clampPosition(
+        drag.originX + (event.clientX - drag.startX),
+        drag.originY + (event.clientY - drag.startY)
+      );
+      const moved = drag.moved;
+      dragRef.current = null;
+      setDraggingId(null);
+      if (!moved) return;
+      suppressClickRef.current = drag.taskId;
+      setPositions((current) => ({ ...current, [drag.taskId]: next }));
+      void updateTask(drag.taskId, { boardX: next.x, boardY: next.y });
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [clampPosition, updateTask]);
+
+  useEffect(() => {
+    if (loading || visibleTasks.length === 0) return;
+    const node = boardRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width) setBoardWidth(width);
+    });
+    observer.observe(node);
+    setBoardWidth(node.clientWidth || 900);
+    return () => observer.disconnect();
+  }, [loading, visibleTasks.length]);
 
   const openCreate = () => {
     const now = new Date();
@@ -512,6 +647,17 @@ export function PersonalTaskBoard() {
     });
     setEditorOpen(true);
   };
+
+  const handleNoteContentClick = useCallback(
+    (task: PersonalTask) => {
+      if (suppressClickRef.current === task.id) {
+        suppressClickRef.current = null;
+        return;
+      }
+      openEdit(task);
+    },
+    []
+  );
 
   const saveTask = async () => {
     if (!user || !taskCollection || !editor.title.trim()) return;
@@ -542,9 +688,12 @@ export function PersonalTaskBoard() {
       if (editor.id) {
         await updateTask(editor.id, payload);
       } else {
+        const spot = nextCreatePosition();
         await addDoc(taskCollection, {
           ...payload,
           order: tasks.length ? Math.max(...tasks.map((task) => task.order ?? 0)) + 1 : 1,
+          boardX: spot.x,
+          boardY: spot.y,
           createdAt: now,
           completedAt: null,
           snoozedUntil: null,
@@ -603,38 +752,28 @@ export function PersonalTaskBoard() {
     await deleteDoc(doc(db, "users", user.uid, "personalTasks", task.id));
   };
 
-  const handleDragEnd = async ({ active, over }: DragEndEvent) => {
-    if (!over || active.id === over.id) return;
-    const oldIndex = visibleTasks.findIndex((task) => task.id === active.id);
-    const newIndex = visibleTasks.findIndex((task) => task.id === over.id);
-    if (oldIndex < 0 || newIndex < 0) return;
-    const moved = arrayMove(visibleTasks, oldIndex, newIndex);
-    setTasks((current) => {
-      const orderById = new Map(moved.map((task, index) => [task.id, index + 1]));
-      return current
-        .map((task) => ({ ...task, order: orderById.get(task.id) ?? task.order }))
-        .sort((a, b) => a.order - b.order);
-    });
-    await Promise.all(moved.map((task, index) => updateTask(task.id, { order: index + 1 })));
-  };
-
   const enableNotifications = async () => {
     if (!user) return;
     setEnablingNotifications(true);
     try {
+      if (!vapidKeyConfigured()) {
+        throw new Error(
+          "Background push is not configured yet. Add NEXT_PUBLIC_FIREBASE_VAPID_KEY in Vercel (Firebase Console → Project settings → Cloud Messaging → Web Push certificates), redeploy, then tap Enable reminders again."
+        );
+      }
       await enableCrmPushNotifications(await user.getIdToken());
-      setNotificationPermission("granted");
+      setPushReady(true);
       toast({
         title: "Reminders enabled",
-        description: "This device can receive CRM task notifications.",
+        description: "This device can receive CRM task notifications even when CRM is closed.",
       });
     } catch (error) {
+      setPushReady(hasCrmPushDeviceRegistered());
       toast({
         variant: "destructive",
         title: "Could not enable reminders",
         description: error instanceof Error ? error.message : "Please try again.",
       });
-      setNotificationPermission(currentNotificationPermission());
     } finally {
       setEnablingNotifications(false);
     }
@@ -657,11 +796,11 @@ export function PersonalTaskBoard() {
               Notes & To‑Do
             </h1>
             <p className="mt-2 max-w-xl text-sm leading-relaxed text-indigo-100/80 sm:text-base">
-              Capture what matters, arrange your sticky notes, and get reminded exactly when work starts.
+              Capture what matters, drag sticky notes anywhere on the board, and get reminded exactly when work starts.
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
-            {notificationPermission !== "granted" ? (
+            {!pushReady ? (
               <Button
                 variant="outline"
                 className="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white"
@@ -796,23 +935,46 @@ export function PersonalTaskBoard() {
           ) : null}
         </div>
       ) : (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={visibleTasks.map((task) => task.id)} strategy={rectSortingStrategy}>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-              {visibleTasks.map((task) => (
-                <SortableStickyNote
+        <div className="overflow-hidden rounded-[1.5rem] border border-amber-900/10 bg-[#f6efd9] shadow-inner">
+          <div className="flex items-center justify-between gap-3 border-b border-amber-900/10 bg-[#efe4c4]/80 px-4 py-2.5 text-xs font-semibold text-amber-950/70 sm:px-5">
+            <span className="inline-flex items-center gap-1.5">
+              <Move className="h-3.5 w-3.5" />
+              Drag notes anywhere — your layout is saved automatically
+            </span>
+            <span className="hidden sm:inline">{visibleTasks.length} on board</span>
+          </div>
+          <div
+            ref={boardRef}
+            className="relative w-full overflow-auto"
+            style={{
+              minHeight: boardHeight,
+              backgroundImage:
+                "radial-gradient(rgba(120, 83, 40, 0.12) 1px, transparent 1px)",
+              backgroundSize: "18px 18px",
+            }}
+          >
+            {visibleTasks.map((task, index) => {
+              const point = positions[task.id] ?? resolveBoardPosition(task, index);
+              return (
+                <FreeStickyNote
                   key={task.id}
                   task={task}
+                  x={point.x}
+                  y={point.y}
+                  zIndex={draggingId === task.id ? 50 : 10 + index}
+                  isDragging={draggingId === task.id}
+                  onPointerDown={handleNotePointerDown}
+                  onContentClick={handleNoteContentClick}
                   onComplete={(item) => void completeTask(item)}
                   onEdit={openEdit}
                   onDelete={(item) => void removeTask(item)}
                   onSnooze={(item, minutes) => void snoozeTask(item, minutes)}
                   onReopen={(item) => void reopenTask(item)}
                 />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>

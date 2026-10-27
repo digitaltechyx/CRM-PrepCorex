@@ -142,6 +142,8 @@ exports.sendCrmTaskReminders = functions
         const title = String(task.title || "Personal task");
         const body = String(task.notes || "Your task is due now.").slice(0, 180);
         const taskUrl = `${CRM_ORIGIN}/dashboard/tasks?task=${encodeURIComponent(taskId)}`;
+        // Data + webpush notification so closed browsers still show a system
+        // alert via FCM, while open CRM tabs receive onMessage/onBackgroundMessage.
         const response = await admin.messaging().sendEachForMulticast({
           tokens,
           data: {
@@ -153,7 +155,8 @@ exports.sendCrmTaskReminders = functions
           },
           webpush: {
             headers: {
-              Urgency: task.priority === "urgent" ? "high" : "normal",
+              Urgency: "high",
+              TTL: "120",
             },
             notification: {
               title: `Due now: ${title}`,

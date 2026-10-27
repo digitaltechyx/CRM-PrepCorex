@@ -27,6 +27,9 @@ export interface PersonalTask {
   color: PersonalTaskColor;
   tags?: string[];
   order: number;
+  /** Free-form sticky board coordinates in pixels. */
+  boardX?: number | null;
+  boardY?: number | null;
   notificationPending?: boolean;
   reminderSentAt?: string | null;
   snoozedUntil?: string | null;

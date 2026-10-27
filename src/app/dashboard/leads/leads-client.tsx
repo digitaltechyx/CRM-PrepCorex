@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { endOfDay } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useCrmLeads } from "@/contexts/crm-leads-context";
+import { useCrmLeads, isLeadArchived } from "@/contexts/crm-leads-context";
 import type { CrmLead } from "@/contexts/crm-leads-context";
 import { LeadKanban } from "@/components/crm/leads/lead-kanban";
 import { QuickAddLeadDialog } from "@/components/crm/leads/quick-add-lead-dialog";
@@ -15,7 +15,9 @@ import { LeadsListTable } from "@/components/crm/leads/leads-list-table";
 import { LeadsCsvImportButton } from "@/components/crm/leads/leads-csv-import";
 import { computeLeadStats } from "@/lib/crm-lead-stats";
 import { firestoreTimestampToDate } from "@/lib/crm-date-utils";
-import { Loader2, Sparkles } from "lucide-react";
+import { Archive, Loader2, Sparkles } from "lucide-react";
+
+type LeadsTab = "board" | "list" | "due" | "archive";
 
 /** Due today + overdue (missed follow-ups stay visible). */
 function dueTodayLeads(leads: CrmLead[], now = new Date()) {
@@ -30,27 +32,62 @@ function dueTodayLeads(leads: CrmLead[], now = new Date()) {
 export function LeadsPageClient() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const [tab, setTab] = useState<"board" | "list" | "due">("board");
+  const [tab, setTab] = useState<LeadsTab>("board");
 
   useEffect(() => {
-    const t = tabParam === "due" ? "due" : tabParam === "list" ? "list" : "board";
-    setTab(t);
+    if (tabParam === "due") setTab("due");
+    else if (tabParam === "list") setTab("list");
+    else if (tabParam === "archive") setTab("archive");
+    else setTab("board");
   }, [tabParam]);
+
   const [search, setSearch] = useState("");
   const [platform, setPlatform] = useState("all");
   const [status, setStatus] = useState("all");
   const [country, setCountry] = useState("");
+  const [businessType, setBusinessType] = useState("all");
+  const [phone, setPhone] = useState("");
+  const [archivedFrom, setArchivedFrom] = useState("");
+  const [archivedTo, setArchivedTo] = useState("");
   const [selected, setSelected] = useState<CrmLead | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const { leads, loading, error } = useCrmLeads();
 
-  const filtered = useMemo(
-    () => filterLeads(leads, { search, platform, status, country }),
-    [leads, search, platform, status, country]
+  const activeLeads = useMemo(() => leads.filter((l) => !isLeadArchived(l)), [leads]);
+  const archivedLeads = useMemo(() => leads.filter((l) => isLeadArchived(l)), [leads]);
+
+  const filteredActive = useMemo(
+    () => filterLeads(activeLeads, { search, platform, status, country }),
+    [activeLeads, search, platform, status, country]
   );
 
-  const dueFiltered = useMemo(() => dueTodayLeads(filtered), [filtered]);
+  const filteredArchived = useMemo(
+    () =>
+      filterLeads(archivedLeads, {
+        search,
+        platform,
+        status,
+        country,
+        businessType,
+        phone,
+        archivedFrom,
+        archivedTo,
+      }),
+    [
+      archivedLeads,
+      search,
+      platform,
+      status,
+      country,
+      businessType,
+      phone,
+      archivedFrom,
+      archivedTo,
+    ]
+  );
+
+  const dueFiltered = useMemo(() => dueTodayLeads(filteredActive), [filteredActive]);
   const stats = useMemo(() => computeLeadStats(leads), [leads]);
 
   function openLead(l: CrmLead) {
@@ -62,6 +99,8 @@ export function LeadsPageClient() {
     if (!selected) return null;
     return leads.find((l) => l.id === selected.id) ?? selected;
   }, [selected, leads]);
+
+  const isArchiveTab = tab === "archive";
 
   return (
     <div className="relative mx-auto min-w-0 max-w-[1600px] space-y-6">
@@ -81,7 +120,14 @@ export function LeadsPageClient() {
           <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
             Pipeline, follow-ups, and timeline — synced to Firestore.{" "}
             <span className="font-semibold text-foreground/80">{stats.total}</span>{" "}
-            {stats.total === 1 ? "lead" : "leads"} in your workspace.
+            {stats.total === 1 ? "lead" : "leads"} in pipeline
+            {stats.archived > 0 ? (
+              <>
+                {" · "}
+                <span className="font-semibold text-foreground/80">{stats.archived}</span> archived
+              </>
+            ) : null}
+            .
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:pb-0.5">
@@ -112,10 +158,23 @@ export function LeadsPageClient() {
         onStatusChange={setStatus}
         country={country}
         onCountryChange={setCountry}
+        expanded={isArchiveTab}
+        businessType={businessType}
+        onBusinessTypeChange={setBusinessType}
+        phone={phone}
+        onPhoneChange={setPhone}
+        archivedFrom={archivedFrom}
+        onArchivedFromChange={setArchivedFrom}
+        archivedTo={archivedTo}
+        onArchivedToChange={setArchivedTo}
       />
 
-      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList className="grid h-11 w-full max-w-md grid-cols-3 gap-1 rounded-xl border border-border/60 bg-muted/40 p-1 shadow-inner">
+      <Tabs
+        value={tab}
+        onValueChange={(v) => setTab(v as LeadsTab)}
+        className="space-y-4"
+      >
+        <TabsList className="grid h-11 w-full max-w-xl grid-cols-4 gap-1 rounded-xl border border-border/60 bg-muted/40 p-1 shadow-inner">
           <TabsTrigger
             value="board"
             className="rounded-lg data-[state=active]:bg-card data-[state=active]:shadow-md data-[state=active]:ring-1 data-[state=active]:ring-border/60"
@@ -134,6 +193,17 @@ export function LeadsPageClient() {
           >
             Due today
           </TabsTrigger>
+          <TabsTrigger
+            value="archive"
+            className="rounded-lg data-[state=active]:bg-card data-[state=active]:shadow-md data-[state=active]:ring-1 data-[state=active]:ring-border/60"
+          >
+            Archive
+            {stats.archived > 0 ? (
+              <span className="ml-1 tabular-nums text-[10px] text-muted-foreground">
+                ({stats.archived})
+              </span>
+            ) : null}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="board" className="mt-4">
           {loading ? (
@@ -141,20 +211,57 @@ export function LeadsPageClient() {
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <LeadKanban leads={filtered} onOpenLead={openLead} />
+            <LeadKanban leads={filteredActive} onOpenLead={openLead} />
           )}
         </TabsContent>
         <TabsContent value="list" className="mt-4">
-          <LeadsListTable leads={filtered} onOpen={openLead} />
+          <LeadsListTable leads={filteredActive} onOpen={openLead} />
         </TabsContent>
         <TabsContent value="due" className="mt-4">
           <Card className="overflow-hidden border-border/70 shadow-md ring-1 ring-black/[0.03] dark:ring-white/[0.05]">
             <CardHeader className="border-b border-border/50 bg-gradient-to-r from-amber-500/8 via-transparent to-primary/5">
               <CardTitle className="text-lg">Follow-ups due today</CardTitle>
-              <CardDescription>Leads with next follow-up date today (excludes client & dead).</CardDescription>
+              <CardDescription>
+                Leads with next follow-up date today (excludes client &amp; dead).
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <LeadsListTable leads={dueFiltered} onOpen={openLead} showListChrome={false} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="archive" className="mt-4">
+          <Card className="overflow-hidden border-border/70 shadow-md ring-1 ring-black/[0.03] dark:ring-white/[0.05]">
+            <CardHeader className="border-b border-border/50 bg-gradient-to-r from-slate-500/8 via-transparent to-primary/5">
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Archive className="h-5 w-5 text-muted-foreground" />
+                Archived leads
+              </CardTitle>
+              <CardDescription>
+                Removed from the pipeline but kept for later. Open a lead and restore it to put it
+                back on the board.{" "}
+                <span className="font-medium text-foreground/80">
+                  {filteredArchived.length}
+                </span>{" "}
+                shown
+                {filteredArchived.length !== archivedLeads.length
+                  ? ` of ${archivedLeads.length}`
+                  : ""}
+                .
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex justify-center py-16">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <LeadsListTable
+                  leads={filteredArchived}
+                  onOpen={openLead}
+                  showListChrome={false}
+                />
+              )}
             </CardContent>
           </Card>
         </TabsContent>

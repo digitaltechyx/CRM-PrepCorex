@@ -16,6 +16,7 @@ export function computeLeadStats(leads: CrmLead[], now = new Date()) {
   let dead = 0;
 
   for (const l of leads) {
+    if (l.archived) continue;
     const created = firestoreTimestampToDate(l.createdAt ?? undefined);
     if (created && isWithinInterval(created, { start: dayStart, end: dayEnd })) {
       newToday += 1;
@@ -39,8 +40,12 @@ export function computeLeadStats(leads: CrmLead[], now = new Date()) {
   const closed = clients + dead;
   const conversionRate = closed > 0 ? Math.round((100 * clients) / closed) : 0;
 
+  const activeCount = leads.reduce((n, l) => (l.archived ? n : n + 1), 0);
+  const archivedCount = leads.length - activeCount;
+
   return {
-    total: leads.length,
+    total: activeCount,
+    archived: archivedCount,
     newToday,
     dueToday,
     interested,

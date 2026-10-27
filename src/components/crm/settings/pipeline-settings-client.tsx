@@ -73,6 +73,7 @@ export function PipelineSettingsClient() {
   const leadCountByStatus = useMemo(() => {
     const map = new Map<string, number>();
     for (const l of leads) {
+      if (l.archived) continue;
       map.set(l.status, (map.get(l.status) || 0) + 1);
     }
     return map;

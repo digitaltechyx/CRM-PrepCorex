@@ -47,6 +47,10 @@ export interface CrmLead {
   country?: string;
   businessType?: BusinessType | string;
   status: LeadStatus;
+  /** Soft-removed from pipeline; visible only on Archive tab. */
+  archived?: boolean;
+  archivedAt?: TimestampType | null;
+  archivedByUid?: string;
   firstContactAt?: TimestampType | null;
   lastContactAt?: TimestampType | null;
   nextFollowUpAt?: TimestampType | null;
@@ -86,6 +90,9 @@ function normalizeLead(id: string, data: Record<string, unknown>): CrmLead {
     country: data.country != null ? String(data.country) : undefined,
     businessType: data.businessType != null ? String(data.businessType) : undefined,
     status: normalizeStatus(data.status),
+    archived: data.archived === true,
+    archivedAt: (data.archivedAt as TimestampType) ?? null,
+    archivedByUid: data.archivedByUid != null ? String(data.archivedByUid) : undefined,
     firstContactAt: (data.firstContactAt as TimestampType) ?? null,
     lastContactAt: (data.lastContactAt as TimestampType) ?? null,
     nextFollowUpAt: (data.nextFollowUpAt as TimestampType) ?? null,
@@ -97,6 +104,10 @@ function normalizeLead(id: string, data: Record<string, unknown>): CrmLead {
     createdAt: (data.createdAt as TimestampType) ?? null,
     updatedAt: (data.updatedAt as TimestampType) ?? null,
   };
+}
+
+export function isLeadArchived(lead: Pick<CrmLead, "archived">): boolean {
+  return lead.archived === true;
 }
 
 export type CrmLeadUpdatePatch = Partial<{
@@ -126,6 +137,8 @@ type CrmLeadsContextValue = {
   ) => Promise<void>;
   updateLead: (leadId: string, patch: CrmLeadUpdatePatch) => Promise<void>;
   markClient: (leadId: string, monthlyRevenue?: number | null) => Promise<void>;
+  archiveLead: (leadId: string, userUid: string) => Promise<void>;
+  restoreLead: (leadId: string, userUid: string) => Promise<void>;
   addTimelineNote: (leadId: string, text: string, userUid: string) => Promise<void>;
   updateTimelineNote: (leadId: string, entryId: string, text: string) => Promise<void>;
   deleteTimelineNote: (leadId: string, entryId: string) => Promise<void>;
@@ -217,6 +230,7 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
         lastContactAt: serverTimestamp(),
         nextFollowUpAt: nextTs,
         notes: input.notes?.trim() || "",
+        archived: false,
         ...(input.contactId ? { contactId: input.contactId } : {}),
         ...(status === "client" ? { convertedAt: serverTimestamp() } : {}),
         createdByUid: user.uid,
@@ -301,6 +315,44 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
     [user?.uid, updateLeadStatus]
   );
 
+  const archiveLead = useCallback(
+    async (leadId: string, userUid: string) => {
+      const lead = leads.find((l) => l.id === leadId);
+      if (lead?.archived) return;
+      await updateDoc(doc(db, COLLECTION, leadId), {
+        archived: true,
+        archivedAt: serverTimestamp(),
+        archivedByUid: userUid,
+        updatedAt: serverTimestamp(),
+      });
+      await appendTimeline(leadId, {
+        type: "system",
+        text: "Lead moved to Archive (removed from pipeline)",
+        byUid: userUid,
+      });
+    },
+    [leads, appendTimeline]
+  );
+
+  const restoreLead = useCallback(
+    async (leadId: string, userUid: string) => {
+      const lead = leads.find((l) => l.id === leadId);
+      if (!lead?.archived) return;
+      await updateDoc(doc(db, COLLECTION, leadId), {
+        archived: false,
+        archivedAt: null,
+        archivedByUid: null,
+        updatedAt: serverTimestamp(),
+      });
+      await appendTimeline(leadId, {
+        type: "system",
+        text: "Lead restored to pipeline from Archive",
+        byUid: userUid,
+      });
+    },
+    [leads, appendTimeline]
+  );
+
   const addTimelineNote = useCallback(
     async (leadId: string, text: string, userUid: string) => {
       const t = text.trim();
@@ -368,6 +420,8 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
       updateLeadStatus,
       updateLead,
       markClient,
+      archiveLead,
+      restoreLead,
       addTimelineNote,
       updateTimelineNote,
       deleteTimelineNote,
@@ -381,6 +435,8 @@ export function CrmLeadsProvider({ children }: { children: React.ReactNode }) {
       updateLeadStatus,
       updateLead,
       markClient,
+      archiveLead,
+      restoreLead,
       addTimelineNote,
       updateTimelineNote,
       deleteTimelineNote,

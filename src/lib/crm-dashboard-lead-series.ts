@@ -46,6 +46,7 @@ export function buildLeadsCreatedSeries(leads: CrmLead[], days: number, now = ne
   const counts = new Map<string, number>(dayKeys.map((k) => [k, 0]));
 
   for (const l of leads) {
+    if (l.archived) continue;
     const created = firestoreTimestampToDate(l.createdAt ?? undefined);
     if (!created) continue;
     const key = format(startOfDay(created), "yyyy-MM-dd");
@@ -76,6 +77,7 @@ export function buildStatusCounts(
   const counts = new Map<string, number>();
   for (const col of columns) counts.set(col.id, 0);
   for (const l of leads) {
+    if (l.archived) continue;
     counts.set(l.status, (counts.get(l.status) ?? 0) + 1);
   }
 
@@ -98,6 +100,7 @@ export function buildSourceCounts(leads: CrmLead[]): SourceCountRow[] {
   const map = new Map<PlatformSource, number>();
   for (const s of PLATFORM_SOURCES) map.set(s, 0);
   for (const l of leads) {
+    if (l.archived) continue;
     const c = map.get(l.platformSource) ?? 0;
     map.set(l.platformSource, c + 1);
   }
@@ -114,16 +117,18 @@ export function buildOutcomeSplit(leads: CrmLead[]) {
   let dead = 0;
   let active = 0;
   for (const l of leads) {
+    if (l.archived) continue;
     if (l.status === "client") clients += 1;
     else if (l.status === "dead") dead += 1;
     else active += 1;
   }
-  const total = leads.length || 1;
+  const pipelineTotal = clients + dead + active;
+  const total = pipelineTotal || 1;
   return {
     clients,
     dead,
     active,
-    total: leads.length,
+    total: pipelineTotal,
     pctClients: Math.round((100 * clients) / total),
     pctDead: Math.round((100 * dead) / total),
     pctActive: Math.round((100 * active) / total),

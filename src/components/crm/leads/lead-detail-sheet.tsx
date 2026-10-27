@@ -44,7 +44,7 @@ import {
 import { useCrmPipeline } from "@/contexts/crm-pipeline-context";
 import { firestoreTimestampToDate } from "@/lib/crm-date-utils";
 import { format } from "date-fns";
-import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Loader2, Pencil, Trash2 } from "lucide-react";
 
 type Draft = {
   leadName: string;
@@ -88,8 +88,16 @@ type Props = {
 export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { updateLead, updateLeadStatus, addTimelineNote, updateTimelineNote, deleteTimelineNote, subscribeTimeline } =
-    useCrmLeads();
+  const {
+    updateLead,
+    updateLeadStatus,
+    archiveLead,
+    restoreLead,
+    addTimelineNote,
+    updateTimelineNote,
+    deleteTimelineNote,
+    subscribeTimeline,
+  } = useCrmLeads();
   const { visibleStatuses, statuses, getLabel } = useCrmPipeline();
   const statusOptions = useMemo(() => {
     const visibleIds = new Set(visibleStatuses.map((s) => s.id));
@@ -106,6 +114,7 @@ export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [editingEntryText, setEditingEntryText] = useState("");
   const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (lead && open) {
@@ -219,6 +228,41 @@ export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
     }
   }
 
+  async function confirmArchiveLead() {
+    if (!user?.uid) return;
+    setSaving(true);
+    try {
+      await archiveLead(lead.id, user.uid);
+      setArchiveConfirmOpen(false);
+      toast({
+        title: "Lead archived",
+        description: "Removed from pipeline. Find it under Archive to restore later.",
+      });
+      onOpenChange(false);
+    } catch (e) {
+      toast({ variant: "destructive", title: "Archive failed", description: String(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRestoreLead() {
+    if (!user?.uid) return;
+    setSaving(true);
+    try {
+      await restoreLead(lead.id, user.uid);
+      toast({
+        title: "Lead restored",
+        description: "Back on the pipeline with its previous status.",
+      });
+      onOpenChange(false);
+    } catch (e) {
+      toast({ variant: "destructive", title: "Restore failed", description: String(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="flex h-full max-h-dvh w-full min-w-0 flex-col gap-0 overflow-hidden p-6 sm:max-w-xl">
@@ -226,6 +270,7 @@ export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
           <SheetTitle className="pr-2">{draft.leadName || "Lead"}</SheetTitle>
           <SheetDescription>
             {(draft.company || "No company") + " · " + PLATFORM_LABELS[draft.platformSource]}
+            {lead.archived ? " · Archived" : ""}
           </SheetDescription>
         </SheetHeader>
 
@@ -400,9 +445,35 @@ export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
               />
             </div>
 
-            <Button type="button" size="sm" onClick={saveDetails} disabled={saving}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" size="sm" onClick={saveDetails} disabled={saving}>
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save changes"}
+              </Button>
+              {lead.archived ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={saving || !user?.uid}
+                  onClick={() => void handleRestoreLead()}
+                >
+                  <ArchiveRestore className="mr-1.5 h-4 w-4" />
+                  Restore to pipeline
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="text-muted-foreground"
+                  disabled={saving || !user?.uid}
+                  onClick={() => setArchiveConfirmOpen(true)}
+                >
+                  <Archive className="mr-1.5 h-4 w-4" />
+                  Move to archive
+                </Button>
+              )}
+            </div>
 
             <Separator />
 
@@ -524,6 +595,29 @@ export function LeadDetailSheet({ lead, open, onOpenChange }: Props) {
                 onClick={() => void confirmDeleteNote()}
               >
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Delete"}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Move this lead to Archive?</AlertDialogTitle>
+              <AlertDialogDescription>
+                It will leave the pipeline, list, and due-today views. You can restore it anytime from
+                the Archive tab — nothing is permanently deleted.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={saving}
+                onClick={() => void confirmArchiveLead()}
+              >
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Archive lead"}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

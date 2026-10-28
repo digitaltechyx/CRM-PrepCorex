@@ -28,8 +28,12 @@ import {
   RefreshCw,
   Unplug,
 } from "lucide-react";
-import type { AppointmentScheduleConfig } from "@/lib/appointments/types";
-import { DEFAULT_SCHEDULE } from "@/lib/appointments/types";
+import type { AppointmentScheduleConfig, WeekdayKey } from "@/lib/appointments/types";
+import {
+  APPOINTMENT_TIMEZONES,
+  DEFAULT_SCHEDULE,
+  WORK_WEEK_DAYS,
+} from "@/lib/appointments/types";
 
 type AdminSettings = {
   connected: boolean;
@@ -65,6 +69,8 @@ export function AppointmentsAdminClient() {
   const [selectedCalendarId, setSelectedCalendarId] = useState("");
   const [bookings, setBookings] = useState<BookingRow[]>([]);
   const [newCalendarName, setNewCalendarName] = useState("PrepCorex Appointments");
+  const [bulkStart, setBulkStart] = useState("09:00");
+  const [bulkEnd, setBulkEnd] = useState("17:00");
 
   const authHeader = useCallback(async () => {
     const token = await user?.getIdToken();
@@ -254,6 +260,52 @@ export function AppointmentsAdminClient() {
     toast({ title: "Booking link copied" });
   }
 
+  function dayHours(day: WeekdayKey): { enabled: boolean; start: string; end: string } {
+    const ranges = schedule.workingHours[day] || [];
+    const first = ranges[0];
+    if (!first) return { enabled: false, start: "09:00", end: "17:00" };
+    return { enabled: true, start: first.start || "09:00", end: first.end || "17:00" };
+  }
+
+  function setDayEnabled(day: WeekdayKey, enabled: boolean) {
+    setSchedule((s) => {
+      const next = { ...s.workingHours };
+      if (!enabled) {
+        delete next[day];
+      } else {
+        const prev = s.workingHours[day]?.[0];
+        next[day] = [{ start: prev?.start || "09:00", end: prev?.end || "17:00" }];
+      }
+      return { ...s, workingHours: next };
+    });
+  }
+
+  function setDayRange(day: WeekdayKey, field: "start" | "end", value: string) {
+    setSchedule((s) => {
+      const prev = s.workingHours[day]?.[0] || { start: "09:00", end: "17:00" };
+      return {
+        ...s,
+        workingHours: {
+          ...s.workingHours,
+          [day]: [{ ...prev, [field]: value }],
+        },
+      };
+    });
+  }
+
+  function applyHoursToAllWeekdays() {
+    const start = bulkStart || "09:00";
+    const end = bulkEnd || "17:00";
+    setSchedule((s) => {
+      const next = { ...s.workingHours };
+      for (const d of WORK_WEEK_DAYS) {
+        next[d.key] = [{ start, end }];
+      }
+      return { ...s, workingHours: next };
+    });
+    toast({ title: "Applied to Mon–Fri", description: `${start} – ${end}` });
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center py-20">
@@ -432,10 +484,25 @@ export function AppointmentsAdminClient() {
             </div>
             <div className="space-y-1.5">
               <Label>Timezone</Label>
-              <Input
+              <Select
                 value={schedule.timezone}
-                onChange={(e) => setSchedule((s) => ({ ...s, timezone: e.target.value }))}
-              />
+                onValueChange={(v) => setSchedule((s) => ({ ...s, timezone: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select timezone" />
+                </SelectTrigger>
+                <SelectContent>
+                  {APPOINTMENT_TIMEZONES.map((tz) => (
+                    <SelectItem key={tz.value} value={tz.value}>
+                      {tz.label}
+                    </SelectItem>
+                  ))}
+                  {!APPOINTMENT_TIMEZONES.some((tz) => tz.value === schedule.timezone) &&
+                  schedule.timezone ? (
+                    <SelectItem value={schedule.timezone}>{schedule.timezone}</SelectItem>
+                  ) : null}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <Label>Location type</Label>
@@ -495,6 +562,10 @@ export function AppointmentsAdminClient() {
                   }))
                 }
               />
+              <p className="text-[11px] text-muted-foreground">
+                Guests cannot book a slot that starts sooner than this many hours from now. Example:
+                if set to 2 and it is 3:00 PM, the earliest bookable time is 5:00 PM.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label>Bookable days ahead</Label>
@@ -510,6 +581,78 @@ export function AppointmentsAdminClient() {
                   }))
                 }
               />
+              <p className="text-[11px] text-muted-foreground">
+                How far into the future the calendar stays open. Example: 28 means guests can pick
+                today through about 4 weeks ahead — not months later.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-xl border p-3">
+            <div>
+              <p className="text-sm font-medium">Available hours</p>
+              <p className="text-xs text-muted-foreground">
+                Turn days on/off and set start–end for each weekday, or apply one range to all Mon–Fri.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-muted/20 p-2.5">
+              <div className="space-y-1">
+                <Label className="text-xs">Start</Label>
+                <Input
+                  type="time"
+                  className="h-9 w-[8.5rem]"
+                  value={bulkStart}
+                  onChange={(e) => setBulkStart(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">End</Label>
+                <Input
+                  type="time"
+                  className="h-9 w-[8.5rem]"
+                  value={bulkEnd}
+                  onChange={(e) => setBulkEnd(e.target.value)}
+                />
+              </div>
+              <Button type="button" variant="secondary" size="sm" onClick={applyHoursToAllWeekdays}>
+                Apply to all Mon–Fri
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {WORK_WEEK_DAYS.map((d) => {
+                const hours = dayHours(d.key);
+                return (
+                  <div
+                    key={d.key}
+                    className="grid grid-cols-[6.5rem_auto_1fr_1fr] items-center gap-2 rounded-lg border px-2.5 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={hours.enabled}
+                        onCheckedChange={(v) => setDayEnabled(d.key, v)}
+                      />
+                      <span className="text-sm font-medium">{d.label.slice(0, 3)}</span>
+                    </div>
+                    <span className="hidden text-xs text-muted-foreground sm:inline">
+                      {hours.enabled ? "Open" : "Closed"}
+                    </span>
+                    <Input
+                      type="time"
+                      className="h-9"
+                      disabled={!hours.enabled}
+                      value={hours.start}
+                      onChange={(e) => setDayRange(d.key, "start", e.target.value)}
+                    />
+                    <Input
+                      type="time"
+                      className="h-9"
+                      disabled={!hours.enabled}
+                      value={hours.end}
+                      onChange={(e) => setDayRange(d.key, "end", e.target.value)}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -532,10 +675,6 @@ export function AppointmentsAdminClient() {
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Save schedule
           </Button>
-          <p className="text-xs text-muted-foreground">
-            Default hours: Mon–Fri 9:00–17:00 ({schedule.timezone}). Fine-grained day editing can be
-            added next.
-          </p>
         </CardContent>
       </Card>
 

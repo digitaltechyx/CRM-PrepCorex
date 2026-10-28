@@ -85,3 +85,29 @@ export const DEFAULT_SCHEDULE: AppointmentScheduleConfig = {
 };
 
 export const WEEKDAY_KEYS: WeekdayKey[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+/** Editable Mon–Fri rows in admin (weekend off by default). */
+export const WORK_WEEK_DAYS: Array<{ key: WeekdayKey; label: string }> = [
+  { key: "mon", label: "Monday" },
+  { key: "tue", label: "Tuesday" },
+  { key: "wed", label: "Wednesday" },
+  { key: "thu", label: "Thursday" },
+  { key: "fri", label: "Friday" },
+];
+
+export const APPOINTMENT_TIMEZONES: Array<{ value: string; label: string }> = [
+  { value: "America/New_York", label: "Eastern Time (New York)" },
+  { value: "America/Chicago", label: "Central Time (Chicago)" },
+  { value: "America/Denver", label: "Mountain Time (Denver)" },
+  { value: "America/Los_Angeles", label: "Pacific Time (Los Angeles)" },
+  { value: "America/Phoenix", label: "Arizona (Phoenix)" },
+  { value: "America/Toronto", label: "Eastern Time (Toronto)" },
+  { value: "Europe/London", label: "UK (London)" },
+  { value: "Europe/Paris", label: "Central Europe (Paris)" },
+  { value: "Asia/Karachi", label: "Pakistan (Karachi)" },
+  { value: "Asia/Dubai", label: "UAE (Dubai)" },
+  { value: "Asia/Kolkata", label: "India (Kolkata)" },
+  { value: "Asia/Singapore", label: "Singapore" },
+  { value: "Australia/Sydney", label: "Australia (Sydney)" },
+  { value: "UTC", label: "UTC" },
+];

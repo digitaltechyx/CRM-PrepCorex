@@ -227,7 +227,13 @@ export function PublicBookingClient({ slug }: { slug: string }) {
                   <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
                 </div>
               ) : slots.length === 0 ? (
-                <p className="mt-2 text-sm text-slate-500">No open times this day.</p>
+                <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+                  <p className="font-medium">No times available on this day</p>
+                  <p className="mt-1 text-xs text-amber-900/80">
+                    All slots may already be booked, outside working hours, or too soon to book.
+                    Please pick another day.
+                  </p>
+                </div>
               ) : (
                 <div className="mt-2 grid max-h-48 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3">
                   {slots.map((slot) => (

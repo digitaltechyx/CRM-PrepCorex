@@ -146,14 +146,76 @@ function editorRecurrence(editor: EditorState): TaskRecurrence {
   return { type: "none" };
 }
 
+function datePartFromLocal(value: string): string {
+  if (!value) return "";
+  return value.slice(0, 10);
+}
+
+function timePartFromLocal(value: string): string {
+  const m = value.match(/T(\d{2}:\d{2})/);
+  return m?.[1] || "";
+}
+
+function combineDateAndTime(date: string, time: string): string {
+  if (!date) return "";
+  return `${date}T${time || "09:00"}`;
+}
+
+function todayLocalDate(): string {
+  return toDateTimeLocal(new Date().toISOString()).slice(0, 10);
+}
+
+/** Apply a wall-clock time to due/end while keeping dates (and duration when only start time changes). */
+function withScheduleTime(
+  current: EditorState,
+  patch: { date?: string; startTime?: string; endTime?: string }
+): EditorState {
+  const date = patch.date ?? datePartFromLocal(current.dueAt) ?? todayLocalDate();
+  const startTime =
+    patch.startTime ?? timePartFromLocal(current.dueAt) ?? "09:00";
+  let endTime = patch.endTime ?? timePartFromLocal(current.endAt);
+
+  const dueAt = combineDateAndTime(date, startTime);
+  if (!endTime || (patch.startTime && !patch.endTime)) {
+    const start = new Date(dueAt);
+    if (!Number.isNaN(start.getTime())) {
+      const prevEnd = current.endAt ? new Date(current.endAt) : null;
+      const prevStart = current.dueAt ? new Date(current.dueAt) : null;
+      const durationMs =
+        prevEnd && prevStart && prevEnd > prevStart
+          ? prevEnd.getTime() - prevStart.getTime()
+          : 30 * 60_000;
+      endTime = timePartFromLocal(
+        toDateTimeLocal(new Date(start.getTime() + durationMs).toISOString())
+      );
+    } else {
+      endTime = "09:30";
+    }
+  }
+
+  let endAt = combineDateAndTime(date, endTime);
+  if (endAt && dueAt && endAt <= dueAt) {
+    // End before start → push end to next calendar day
+    const endDate = new Date(`${date}T12:00:00`);
+    endDate.setDate(endDate.getDate() + 1);
+    endAt = combineDateAndTime(datePartFromLocal(toDateTimeLocal(endDate.toISOString())), endTime);
+  }
+
+  return { ...current, dueAt, endAt };
+}
+
 function scheduleLabel(task: PersonalTask): string {
-  const start = dateTimeLabel(task.dueAt);
   if (!task.dueAt) return "No schedule";
-  const end = task.endAt ? dateTimeLabel(task.endAt) : null;
   const recur = recurrenceLabel(task.recurrence);
-  if (end && recur) return `${start} → ${end} · ${recur}`;
+  if (recur) {
+    const startT = timePartFromLocal(toDateTimeLocal(task.dueAt)) || "";
+    const endT = task.endAt ? timePartFromLocal(toDateTimeLocal(task.endAt)) : "";
+    const clock = endT ? `${startT}–${endT}` : startT;
+    return clock ? `${recur} · ${clock}` : recur;
+  }
+  const start = dateTimeLabel(task.dueAt);
+  const end = task.endAt ? dateTimeLabel(task.endAt) : null;
   if (end) return `${start} → ${end}`;
-  if (recur) return `${start} · ${recur}`;
   return start;
 }
 
@@ -1135,44 +1197,89 @@ export function PersonalTaskBoard() {
                 className="min-h-28 resize-y"
               />
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="task-due">Start date & time</Label>
-                <Input
-                  id="task-due"
-                  type="datetime-local"
-                  value={editor.dueAt}
-                  onChange={(event) => {
-                    const dueAt = event.target.value;
-                    setEditor((current) => {
-                      let endAt = current.endAt;
-                      if (dueAt && (!endAt || endAt <= dueAt)) {
-                        const start = new Date(dueAt);
-                        if (!Number.isNaN(start.getTime())) {
-                          endAt = toDateTimeLocal(
-                            new Date(start.getTime() + 30 * 60_000).toISOString()
-                          );
+            {editor.recurrenceType === "none" ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="task-due">Start date & time</Label>
+                  <Input
+                    id="task-due"
+                    type="datetime-local"
+                    value={editor.dueAt}
+                    onChange={(event) => {
+                      const dueAt = event.target.value;
+                      setEditor((current) => {
+                        let endAt = current.endAt;
+                        if (dueAt && (!endAt || endAt <= dueAt)) {
+                          const start = new Date(dueAt);
+                          if (!Number.isNaN(start.getTime())) {
+                            endAt = toDateTimeLocal(
+                              new Date(start.getTime() + 30 * 60_000).toISOString()
+                            );
+                          }
                         }
-                      }
-                      return { ...current, dueAt, endAt };
-                    });
-                  }}
-                  className="h-11"
-                />
+                        return { ...current, dueAt, endAt };
+                      });
+                    }}
+                    className="h-11"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="task-end">End date & time</Label>
+                  <Input
+                    id="task-end"
+                    type="datetime-local"
+                    value={editor.endAt}
+                    onChange={(event) =>
+                      setEditor((current) => ({ ...current, endAt: event.target.value }))
+                    }
+                    className="h-11"
+                  />
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="task-end">End date & time</Label>
-                <Input
-                  id="task-end"
-                  type="datetime-local"
-                  value={editor.endAt}
-                  onChange={(event) =>
-                    setEditor((current) => ({ ...current, endAt: event.target.value }))
-                  }
-                  className="h-11"
-                />
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="task-first-day">First day</Label>
+                  <Input
+                    id="task-first-day"
+                    type="date"
+                    value={datePartFromLocal(editor.dueAt) || todayLocalDate()}
+                    onChange={(event) =>
+                      setEditor((current) => withScheduleTime(current, { date: event.target.value }))
+                    }
+                    className="h-11"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="task-start-time">Starts at (each day)</Label>
+                  <Input
+                    id="task-start-time"
+                    type="time"
+                    value={timePartFromLocal(editor.dueAt) || "09:00"}
+                    onChange={(event) =>
+                      setEditor((current) =>
+                        withScheduleTime(current, { startTime: event.target.value })
+                      )
+                    }
+                    className="h-11"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="task-end-time">Ends at (each day)</Label>
+                  <Input
+                    id="task-end-time"
+                    type="time"
+                    value={timePartFromLocal(editor.endAt) || "09:30"}
+                    onChange={(event) =>
+                      setEditor((current) =>
+                        withScheduleTime(current, { endTime: event.target.value })
+                      )
+                    }
+                    className="h-11"
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="space-y-3 rounded-xl border bg-slate-50/80 p-3.5">
               <div className="space-y-2">
@@ -1180,10 +1287,22 @@ export function PersonalTaskBoard() {
                 <Select
                   value={editor.recurrenceType}
                   onValueChange={(value) =>
-                    setEditor((current) => ({
-                      ...current,
-                      recurrenceType: value as EditorState["recurrenceType"],
-                    }))
+                    setEditor((current) => {
+                      const recurrenceType = value as EditorState["recurrenceType"];
+                      if (recurrenceType === "none") {
+                        return { ...current, recurrenceType };
+                      }
+                      // Ensure date + times exist when switching into a repeating schedule
+                      const next = withScheduleTime(
+                        { ...current, recurrenceType },
+                        {
+                          date: datePartFromLocal(current.dueAt) || todayLocalDate(),
+                          startTime: timePartFromLocal(current.dueAt) || "09:00",
+                          endTime: timePartFromLocal(current.endAt) || undefined,
+                        }
+                      );
+                      return next;
+                    })
                   }
                 >
                   <SelectTrigger className="h-11 bg-white">
@@ -1243,6 +1362,16 @@ export function PersonalTaskBoard() {
                     }
                     className="h-11 bg-white"
                   />
+                  <p className="text-[11px] text-muted-foreground">
+                    Runs at{" "}
+                    <strong>
+                      {timePartFromLocal(editor.dueAt) || "09:00"}
+                      {timePartFromLocal(editor.endAt)
+                        ? ` – ${timePartFromLocal(editor.endAt)}`
+                        : ""}
+                    </strong>{" "}
+                    on each selected day.
+                  </p>
                 </div>
               ) : null}
               <p className="text-[11px] leading-relaxed text-muted-foreground">

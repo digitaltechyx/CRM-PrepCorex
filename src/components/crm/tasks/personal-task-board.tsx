@@ -286,10 +286,11 @@ function priorityClass(priority: PersonalTaskPriority): string {
 
 function FreeStickyNote({
   task,
-  x,
-  y,
-  zIndex,
-  isDragging,
+  mode = "free",
+  x = 0,
+  y = 0,
+  zIndex = 1,
+  isDragging = false,
   onPointerDown,
   onContentClick,
   onComplete,
@@ -299,11 +300,13 @@ function FreeStickyNote({
   onReopen,
 }: {
   task: PersonalTask;
-  x: number;
-  y: number;
-  zIndex: number;
-  isDragging: boolean;
-  onPointerDown: (event: PointerEvent, taskId: string) => void;
+  /** free = desktop drag board; grid = mobile/tablet card layout */
+  mode?: "free" | "grid";
+  x?: number;
+  y?: number;
+  zIndex?: number;
+  isDragging?: boolean;
+  onPointerDown?: (event: PointerEvent, taskId: string) => void;
   onContentClick: (task: PersonalTask) => void;
   onComplete: (task: PersonalTask) => void;
   onEdit: (task: PersonalTask) => void;
@@ -315,27 +318,41 @@ function FreeStickyNote({
   const completed = task.status === "completed";
   const color = TASK_COLORS[task.color] ?? TASK_COLORS.sun;
   const tilt = noteTilt(task.id);
+  const isGrid = mode === "grid";
 
   return (
     <article
       data-sticky-note
-      onPointerDown={(event) => onPointerDown(event.nativeEvent, task.id)}
-      style={{
-        left: x,
-        top: y,
-        width: NOTE_WIDTH,
-        zIndex,
-        transform: isDragging
-          ? `rotate(${tilt * 0.2}deg) scale(1.05)`
-          : `rotate(${tilt * 0.35}deg)`,
-      }}
+      onPointerDown={
+        isGrid || !onPointerDown
+          ? undefined
+          : (event) => onPointerDown(event.nativeEvent, task.id)
+      }
+      style={
+        isGrid
+          ? undefined
+          : {
+              left: x,
+              top: y,
+              width: NOTE_WIDTH,
+              zIndex,
+              transform: isDragging
+                ? `rotate(${tilt * 0.2}deg) scale(1.05)`
+                : `rotate(${tilt * 0.35}deg)`,
+            }
+      }
       className={cn(
-        "group absolute flex min-h-[220px] touch-none select-none flex-col overflow-hidden rounded-[1.25rem] border p-4 text-slate-900 shadow-[0_18px_40px_-22px_rgba(15,23,42,0.5)] ring-1 ring-white/70 transition-[box-shadow,transform] duration-150 sm:p-5",
-        "cursor-grab active:cursor-grabbing",
+        "group flex flex-col overflow-hidden rounded-[1.25rem] border p-4 text-slate-900 shadow-[0_18px_40px_-22px_rgba(15,23,42,0.5)] ring-1 ring-white/70 transition-[box-shadow,transform] duration-150 sm:p-5",
         color.card,
         overdue && "ring-2 ring-red-400/70",
         completed && "opacity-75 grayscale-[.15]",
-        isDragging && "shadow-2xl ring-2 ring-indigo-400/50"
+        isGrid
+          ? "relative min-h-[200px] w-full touch-auto select-auto"
+          : cn(
+              "absolute min-h-[220px] touch-none select-none",
+              "cursor-grab active:cursor-grabbing",
+              isDragging && "shadow-2xl ring-2 ring-indigo-400/50"
+            )
       )}
     >
       <div
@@ -352,10 +369,14 @@ function FreeStickyNote({
         }}
       />
       <div className="flex items-start justify-between gap-2">
-        <div className="mt-0.5 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-slate-500/80">
-          <GripVertical className="h-4 w-4" />
-          <Move className="h-3.5 w-3.5 opacity-70" />
-        </div>
+        {isGrid ? (
+          <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", color.dot)} />
+        ) : (
+          <div className="mt-0.5 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-slate-500/80">
+            <GripVertical className="h-4 w-4" />
+            <Move className="h-3.5 w-3.5 opacity-70" />
+          </div>
+        )}
         <div className="flex flex-wrap justify-end gap-1.5">
           <Badge variant="outline" className={cn("text-[10px] uppercase", priorityClass(task.priority))}>
             {PRIORITY_LABELS[task.priority]}
@@ -369,7 +390,10 @@ function FreeStickyNote({
       <button
         type="button"
         onClick={() => onContentClick(task)}
-        className="mt-3 min-w-0 flex-1 cursor-inherit text-left"
+        className={cn(
+          "mt-3 min-w-0 flex-1 text-left",
+          isGrid ? "cursor-pointer" : "cursor-inherit"
+        )}
       >
         <h3
           className={cn(
@@ -982,7 +1006,7 @@ export function PersonalTaskBoard() {
               Notes & To‑Do
             </h1>
             <p className="mt-2 max-w-xl text-sm leading-relaxed text-indigo-100/80 sm:text-base">
-              Capture what matters, drag sticky notes anywhere on the board, and get reminded exactly when work starts.
+              Capture what matters, set reminders, and stay on schedule — grid on phone/tablet, free board on desktop.
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -1121,35 +1145,29 @@ export function PersonalTaskBoard() {
           ) : null}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-[1.5rem] border border-amber-900/10 bg-[#f6efd9] shadow-inner">
-          <div className="flex items-center justify-between gap-3 border-b border-amber-900/10 bg-[#efe4c4]/80 px-4 py-2.5 text-xs font-semibold text-amber-950/70 sm:px-5">
-            <span className="inline-flex items-center gap-1.5">
-              <Move className="h-3.5 w-3.5" />
-              Drag notes anywhere — your layout is saved automatically
-            </span>
-            <span className="hidden sm:inline">{visibleTasks.length} on board</span>
-          </div>
-          <div
-            ref={boardRef}
-            className="relative w-full overflow-auto"
-            style={{
-              minHeight: boardHeight,
-              backgroundImage:
-                "radial-gradient(rgba(120, 83, 40, 0.12) 1px, transparent 1px)",
-              backgroundSize: "18px 18px",
-            }}
-          >
-            {visibleTasks.map((task, index) => {
-              const point = positions[task.id] ?? resolveBoardPosition(task, index);
-              return (
+        <>
+          {/* Mobile + tablet: simple responsive grid */}
+          <div className="overflow-hidden rounded-[1.5rem] border border-amber-900/10 bg-[#f6efd9] shadow-inner lg:hidden">
+            <div className="flex items-center justify-between gap-3 border-b border-amber-900/10 bg-[#efe4c4]/80 px-4 py-2.5 text-xs font-semibold text-amber-950/70">
+              <span className="inline-flex items-center gap-1.5">
+                <LayoutGrid className="h-3.5 w-3.5" />
+                Grid view — tap a note to edit
+              </span>
+              <span>{visibleTasks.length}</span>
+            </div>
+            <div
+              className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 sm:gap-4 sm:p-4"
+              style={{
+                backgroundImage:
+                  "radial-gradient(rgba(120, 83, 40, 0.12) 1px, transparent 1px)",
+                backgroundSize: "18px 18px",
+              }}
+            >
+              {visibleTasks.map((task) => (
                 <FreeStickyNote
                   key={task.id}
+                  mode="grid"
                   task={task}
-                  x={point.x}
-                  y={point.y}
-                  zIndex={draggingId === task.id ? 50 : 10 + index}
-                  isDragging={draggingId === task.id}
-                  onPointerDown={handleNotePointerDown}
                   onContentClick={handleNoteContentClick}
                   onComplete={(item) => void completeTask(item)}
                   onEdit={openEdit}
@@ -1157,10 +1175,53 @@ export function PersonalTaskBoard() {
                   onSnooze={(item, minutes) => void snoozeTask(item, minutes)}
                   onReopen={(item) => void reopenTask(item)}
                 />
-              );
-            })}
+              ))}
+            </div>
           </div>
-        </div>
+
+          {/* Desktop: free-drag sticky board */}
+          <div className="hidden overflow-hidden rounded-[1.5rem] border border-amber-900/10 bg-[#f6efd9] shadow-inner lg:block">
+            <div className="flex items-center justify-between gap-3 border-b border-amber-900/10 bg-[#efe4c4]/80 px-4 py-2.5 text-xs font-semibold text-amber-950/70 sm:px-5">
+              <span className="inline-flex items-center gap-1.5">
+                <Move className="h-3.5 w-3.5" />
+                Drag notes anywhere — your layout is saved automatically
+              </span>
+              <span>{visibleTasks.length} on board</span>
+            </div>
+            <div
+              ref={boardRef}
+              className="relative w-full overflow-auto"
+              style={{
+                minHeight: boardHeight,
+                backgroundImage:
+                  "radial-gradient(rgba(120, 83, 40, 0.12) 1px, transparent 1px)",
+                backgroundSize: "18px 18px",
+              }}
+            >
+              {visibleTasks.map((task, index) => {
+                const point = positions[task.id] ?? resolveBoardPosition(task, index);
+                return (
+                  <FreeStickyNote
+                    key={task.id}
+                    mode="free"
+                    task={task}
+                    x={point.x}
+                    y={point.y}
+                    zIndex={draggingId === task.id ? 50 : 10 + index}
+                    isDragging={draggingId === task.id}
+                    onPointerDown={handleNotePointerDown}
+                    onContentClick={handleNoteContentClick}
+                    onComplete={(item) => void completeTask(item)}
+                    onEdit={openEdit}
+                    onDelete={(item) => void removeTask(item)}
+                    onSnooze={(item, minutes) => void snoozeTask(item, minutes)}
+                    onReopen={(item) => void reopenTask(item)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        </>
       )}
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>

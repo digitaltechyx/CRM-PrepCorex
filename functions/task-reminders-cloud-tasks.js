@@ -1,9 +1,9 @@
 /**
  * Schedule exact Cloud Tasks alarms when a personal task is written.
  * Target: CRM POST /api/tasks/reminders/fire
+ *
+ * Lazy-load @google-cloud/tasks so Firebase deploy discovery does not time out.
  */
-
-const { CloudTasksClient } = require("@google-cloud/tasks");
 
 const PRE_START_MINUTES = 20;
 
@@ -102,7 +102,10 @@ function safeTaskIdPart(value) {
 
 let client;
 function getClient() {
-  if (!client) client = new CloudTasksClient();
+  if (!client) {
+    const { CloudTasksClient } = require("@google-cloud/tasks");
+    client = new CloudTasksClient();
+  }
   return client;
 }
 

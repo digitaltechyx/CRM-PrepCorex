@@ -15,12 +15,29 @@ export type PersonalTaskColor =
   | "lavender"
   | "peach";
 
+/** none | every day | specific weekdays (0=Sun … 6=Sat, local time) */
+export type TaskRecurrence =
+  | { type: "none" }
+  | { type: "daily" }
+  | { type: "weekly"; weekdays: number[] };
+
+export type ReminderPhase = "pre_start" | "start" | "end";
+
 export interface PersonalTask {
   id: string;
   ownerUid: string;
   title: string;
   notes?: string;
+  /** Occurrence start (ISO). */
   dueAt?: string | null;
+  /** Occurrence end (ISO). */
+  endAt?: string | null;
+  recurrence?: TaskRecurrence | null;
+  /** Optional last day the series may run (ISO date or datetime). */
+  recurrenceUntil?: string | null;
+  /** Next scheduled push time (ISO). */
+  nextFireAt?: string | null;
+  reminderPhase?: ReminderPhase | null;
   reminderAt?: string | null;
   status: PersonalTaskStatus;
   priority: PersonalTaskPriority;
@@ -32,6 +49,9 @@ export interface PersonalTask {
   boardY?: number | null;
   notificationPending?: boolean;
   reminderSentAt?: string | null;
+  preStartSentAt?: string | null;
+  startSentAt?: string | null;
+  endSentAt?: string | null;
   snoozedUntil?: string | null;
   completedAt?: string | null;
   createdAt?: string | null;
@@ -89,8 +109,9 @@ export function taskDate(value?: string | null): Date | null {
 
 export function isTaskOverdue(task: PersonalTask, now = new Date()): boolean {
   if (task.status === "completed" || task.status === "archived") return false;
-  const due = taskDate(task.dueAt);
-  return !!due && due.getTime() < now.getTime();
+  // Prefer end time when set; otherwise start time.
+  const end = taskDate(task.endAt) || taskDate(task.dueAt);
+  return !!end && end.getTime() < now.getTime();
 }
 
 export function isTaskToday(task: PersonalTask, now = new Date()): boolean {

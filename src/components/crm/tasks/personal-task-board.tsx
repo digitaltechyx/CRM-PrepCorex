@@ -47,7 +47,13 @@ import {
   type PersonalTaskColor,
   type PersonalTaskPriority,
   type PersonalTaskStatus,
+  type TaskRecurrence,
 } from "@/lib/personal-tasks";
+import {
+  buildReminderSchedule,
+  normalizeRecurrence,
+  recurrenceLabel,
+} from "@/lib/personal-task-reminders";
 import {
   enableCrmPushNotifications,
   hasCrmPushDeviceRegistered,
@@ -98,6 +104,10 @@ type EditorState = {
   title: string;
   notes: string;
   dueAt: string;
+  endAt: string;
+  recurrenceType: "none" | "daily" | "weekly";
+  weekdays: number[];
+  recurrenceUntil: string;
   priority: PersonalTaskPriority;
   color: PersonalTaskColor;
   status: PersonalTaskStatus;
@@ -108,11 +118,44 @@ const EMPTY_EDITOR: EditorState = {
   title: "",
   notes: "",
   dueAt: "",
+  endAt: "",
+  recurrenceType: "none",
+  weekdays: [1, 3, 5],
+  recurrenceUntil: "",
   priority: "normal",
   color: "sun",
   status: "todo",
   tags: "",
 };
+
+const WEEKDAY_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 0, label: "Sun" },
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+];
+
+function editorRecurrence(editor: EditorState): TaskRecurrence {
+  if (editor.recurrenceType === "daily") return { type: "daily" };
+  if (editor.recurrenceType === "weekly") {
+    return normalizeRecurrence({ type: "weekly", weekdays: editor.weekdays });
+  }
+  return { type: "none" };
+}
+
+function scheduleLabel(task: PersonalTask): string {
+  const start = dateTimeLabel(task.dueAt);
+  if (!task.dueAt) return "No schedule";
+  const end = task.endAt ? dateTimeLabel(task.endAt) : null;
+  const recur = recurrenceLabel(task.recurrence);
+  if (end && recur) return `${start} → ${end} · ${recur}`;
+  if (end) return `${start} → ${end}`;
+  if (recur) return `${start} · ${recur}`;
+  return start;
+}
 
 const FILTERS: Array<{ id: TaskFilter; label: string }> = [
   { id: "current", label: "Current" },
@@ -304,7 +347,9 @@ function FreeStickyNote({
       >
         <div className={cn("flex min-w-0 items-center gap-1.5 text-xs font-semibold", overdue ? "text-red-700" : "text-slate-600")}>
           <CalendarClock className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{dateTimeLabel(task.dueAt)}</span>
+          <span className="truncate" title={scheduleLabel(task)}>
+            {scheduleLabel(task)}
+          </span>
         </div>
         <div className="flex shrink-0 items-center gap-1 touch-auto">
           {completed ? (
@@ -477,6 +522,8 @@ export function PersonalTaskBoard() {
       status: "completed",
       completedAt: new Date().toISOString(),
       notificationPending: false,
+      nextFireAt: null,
+      reminderPhase: null,
     });
     params.delete("complete");
     window.history.replaceState({}, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
@@ -630,16 +677,28 @@ export function PersonalTaskBoard() {
   const openCreate = () => {
     const now = new Date();
     now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0);
-    setEditor({ ...EMPTY_EDITOR, dueAt: toDateTimeLocal(now.toISOString()) });
+    const end = new Date(now.getTime() + 30 * 60_000);
+    setEditor({
+      ...EMPTY_EDITOR,
+      dueAt: toDateTimeLocal(now.toISOString()),
+      endAt: toDateTimeLocal(end.toISOString()),
+    });
     setEditorOpen(true);
   };
 
   const openEdit = (task: PersonalTask) => {
+    const r = normalizeRecurrence(task.recurrence);
     setEditor({
       id: task.id,
       title: task.title,
       notes: task.notes ?? "",
       dueAt: toDateTimeLocal(task.dueAt),
+      endAt: toDateTimeLocal(task.endAt),
+      recurrenceType: r.type,
+      weekdays: r.type === "weekly" ? r.weekdays : [1, 3, 5],
+      recurrenceUntil: task.recurrenceUntil
+        ? toDateTimeLocal(task.recurrenceUntil).slice(0, 10)
+        : "",
       priority: task.priority,
       color: task.color,
       status: task.status,
@@ -665,6 +724,39 @@ export function PersonalTaskBoard() {
     try {
       const now = new Date().toISOString();
       const dueAt = editor.dueAt ? new Date(editor.dueAt).toISOString() : null;
+      let endAt = editor.endAt ? new Date(editor.endAt).toISOString() : null;
+      if (dueAt && endAt && new Date(endAt).getTime() <= new Date(dueAt).getTime()) {
+        toast({
+          variant: "destructive",
+          title: "Invalid end time",
+          description: "End date & time must be after the start.",
+        });
+        setSaving(false);
+        return;
+      }
+      if (dueAt && !endAt) {
+        endAt = new Date(new Date(dueAt).getTime() + 30 * 60_000).toISOString();
+      }
+      const recurrence = editorRecurrence(editor);
+      if (recurrence.type === "weekly" && recurrence.weekdays.length === 0) {
+        toast({
+          variant: "destructive",
+          title: "Pick weekdays",
+          description: "Choose at least one day for a weekly task.",
+        });
+        setSaving(false);
+        return;
+      }
+      const recurrenceUntil = editor.recurrenceUntil
+        ? new Date(`${editor.recurrenceUntil}T23:59:59`).toISOString()
+        : null;
+      const schedule = buildReminderSchedule({
+        dueAt,
+        endAt,
+        recurrence,
+        recurrenceUntil,
+        status: editor.status,
+      });
       const tags = editor.tags
         .split(",")
         .map((tag) => tag.trim())
@@ -674,15 +766,23 @@ export function PersonalTaskBoard() {
         ownerUid: user.uid,
         title: editor.title.trim(),
         notes: editor.notes.trim(),
-        dueAt,
-        reminderAt: dueAt,
+        dueAt: schedule.dueAt,
+        endAt: schedule.endAt,
+        recurrence,
+        recurrenceUntil,
+        reminderAt: schedule.reminderAt,
+        nextFireAt: schedule.nextFireAt,
+        reminderPhase: schedule.reminderPhase,
         priority: editor.priority,
         color: editor.color,
         status: editor.status,
         tags,
-        notificationPending:
-          !!dueAt && editor.status !== "completed" && editor.status !== "archived",
+        notificationPending: schedule.notificationPending,
         reminderSentAt: null,
+        preStartSentAt: schedule.preStartSentAt,
+        startSentAt: schedule.startSentAt,
+        endSentAt: schedule.endSentAt,
+        deliveryClaimedAt: null,
         updatedAt: now,
       };
       if (editor.id) {
@@ -701,9 +801,16 @@ export function PersonalTaskBoard() {
       }
       setEditorOpen(false);
       setEditor(EMPTY_EDITOR);
+      const remindBits = [
+        "20 min before",
+        "at start",
+        endAt ? "at end" : null,
+      ].filter(Boolean);
       toast({
         title: editor.id ? "Note updated" : "Added to your planner",
-        description: dueAt ? `Reminder set for ${dateTimeLabel(dueAt)}.` : "Saved without a date.",
+        description: dueAt
+          ? `Alerts: ${remindBits.join(", ")}.${recurrence.type !== "none" ? ` ${recurrenceLabel(recurrence)}.` : ""}`
+          : "Saved without a schedule.",
       });
     } catch (error) {
       toast({
@@ -721,28 +828,45 @@ export function PersonalTaskBoard() {
       status: "completed",
       completedAt: new Date().toISOString(),
       notificationPending: false,
+      nextFireAt: null,
+      reminderPhase: null,
     });
     toast({ title: "Task completed", description: "It is now available under Completed." });
   };
 
   const reopenTask = async (task: PersonalTask) => {
-    const due = taskDate(task.dueAt);
+    const schedule = buildReminderSchedule({
+      dueAt: task.dueAt || null,
+      endAt: task.endAt || null,
+      recurrence: task.recurrence,
+      recurrenceUntil: task.recurrenceUntil,
+      status: "todo",
+    });
     await updateTask(task.id, {
       status: "todo",
       completedAt: null,
-      notificationPending: !!due && due.getTime() > Date.now(),
+      ...schedule,
       reminderSentAt: null,
+      deliveryClaimedAt: null,
     });
   };
 
   const snoozeTask = async (task: PersonalTask, minutes: number) => {
     const next = new Date(Date.now() + minutes * 60_000).toISOString();
+    const schedule = buildReminderSchedule({
+      dueAt: task.dueAt || null,
+      endAt: task.endAt || null,
+      recurrence: task.recurrence,
+      recurrenceUntil: task.recurrenceUntil,
+      status: "snoozed",
+      snoozeUntil: next,
+    });
     await updateTask(task.id, {
       status: "snoozed",
-      reminderAt: next,
       snoozedUntil: next,
-      notificationPending: true,
+      ...schedule,
       reminderSentAt: null,
+      deliveryClaimedAt: null,
     });
     toast({ title: "Reminder snoozed", description: `We’ll remind you ${dateTimeLabel(next)}.` });
   };
@@ -985,7 +1109,7 @@ export function PersonalTaskBoard() {
                 {editor.id ? "Edit sticky note" : "Create a new note"}
               </DialogTitle>
               <DialogDescription className="text-indigo-100/80">
-                Add a start time to receive a reminder on your devices.
+                Set start & end times. You’ll get alerts 20 minutes before, at start, and at end.
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -1018,11 +1142,117 @@ export function PersonalTaskBoard() {
                   id="task-due"
                   type="datetime-local"
                   value={editor.dueAt}
-                  onChange={(event) => setEditor((current) => ({ ...current, dueAt: event.target.value }))}
+                  onChange={(event) => {
+                    const dueAt = event.target.value;
+                    setEditor((current) => {
+                      let endAt = current.endAt;
+                      if (dueAt && (!endAt || endAt <= dueAt)) {
+                        const start = new Date(dueAt);
+                        if (!Number.isNaN(start.getTime())) {
+                          endAt = toDateTimeLocal(
+                            new Date(start.getTime() + 30 * 60_000).toISOString()
+                          );
+                        }
+                      }
+                      return { ...current, dueAt, endAt };
+                    });
+                  }}
                   className="h-11"
                 />
               </div>
               <div className="space-y-2">
+                <Label htmlFor="task-end">End date & time</Label>
+                <Input
+                  id="task-end"
+                  type="datetime-local"
+                  value={editor.endAt}
+                  onChange={(event) =>
+                    setEditor((current) => ({ ...current, endAt: event.target.value }))
+                  }
+                  className="h-11"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-xl border bg-slate-50/80 p-3.5">
+              <div className="space-y-2">
+                <Label>Repeat</Label>
+                <Select
+                  value={editor.recurrenceType}
+                  onValueChange={(value) =>
+                    setEditor((current) => ({
+                      ...current,
+                      recurrenceType: value as EditorState["recurrenceType"],
+                    }))
+                  }
+                >
+                  <SelectTrigger className="h-11 bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Does not repeat</SelectItem>
+                    <SelectItem value="daily">Every day</SelectItem>
+                    <SelectItem value="weekly">Specific days each week</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {editor.recurrenceType === "weekly" ? (
+                <div className="space-y-2">
+                  <Label>Days of the week</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {WEEKDAY_OPTIONS.map((day) => {
+                      const on = editor.weekdays.includes(day.value);
+                      return (
+                        <button
+                          key={day.value}
+                          type="button"
+                          onClick={() =>
+                            setEditor((current) => ({
+                              ...current,
+                              weekdays: on
+                                ? current.weekdays.filter((d) => d !== day.value)
+                                : [...current.weekdays, day.value].sort((a, b) => a - b),
+                            }))
+                          }
+                          className={cn(
+                            "h-9 min-w-10 rounded-full px-2.5 text-xs font-bold transition",
+                            on
+                              ? "bg-indigo-700 text-white shadow-sm"
+                              : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
+                          )}
+                        >
+                          {day.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              {editor.recurrenceType !== "none" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="task-until">Repeat until (optional)</Label>
+                  <Input
+                    id="task-until"
+                    type="date"
+                    value={editor.recurrenceUntil}
+                    onChange={(event) =>
+                      setEditor((current) => ({
+                        ...current,
+                        recurrenceUntil: event.target.value,
+                      }))
+                    }
+                    className="h-11 bg-white"
+                  />
+                </div>
+              ) : null}
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Notifications: <strong>20 minutes before</strong> start, <strong>when it starts</strong>
+                , and <strong>when it ends</strong>. Enable reminders on this device if you haven’t.
+              </p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2 sm:col-span-2">
                 <Label>Priority</Label>
                 <Select
                   value={editor.priority}

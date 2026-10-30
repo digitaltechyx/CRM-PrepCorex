@@ -1,14 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminDb, adminMessaging } from "@/lib/firebase-admin";
+import { adminDb } from "@/lib/firebase-admin";
+import { firePersonalTaskReminder } from "@/lib/personal-task-fire";
+import type { ReminderPhase } from "@/lib/personal-task-reminders";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+/**
+ * Backup poller (rare). Primary delivery is Cloud Tasks → /api/tasks/reminders/fire.
+ * Kept for missed/delayed jobs only.
+ */
 function authorized(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET?.trim();
   if (!secret) return process.env.NODE_ENV !== "production";
   return request.headers.get("authorization") === `Bearer ${secret}`;
+}
+
+function resolvePhase(task: Record<string, unknown>): ReminderPhase {
+  const phase = String(task.reminderPhase || "");
+  if (phase === "pre_start" || phase === "start" || phase === "end") return phase;
+  return "start";
+}
+
+function effectiveFireAt(task: Record<string, unknown>): Date | null {
+  const raw = String(task.nextFireAt || task.reminderAt || task.dueAt || "");
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 export async function GET(request: NextRequest) {
@@ -18,11 +37,24 @@ export async function GET(request: NextRequest) {
 
   const db = adminDb();
   const now = new Date();
-  const snapshot = await db
-    .collectionGroup("personalTasks")
-    .where("notificationPending", "==", true)
-    .limit(200)
-    .get();
+  const nowIso = now.toISOString();
+
+  let snapshot;
+  try {
+    snapshot = await db
+      .collectionGroup("personalTasks")
+      .where("notificationPending", "==", true)
+      .where("nextFireAt", "<=", nowIso)
+      .orderBy("nextFireAt", "asc")
+      .limit(30)
+      .get();
+  } catch {
+    snapshot = await db
+      .collectionGroup("personalTasks")
+      .where("notificationPending", "==", true)
+      .limit(40)
+      .get();
+  }
 
   let sentTasks = 0;
   let sentDevices = 0;
@@ -32,94 +64,52 @@ export async function GET(request: NextRequest) {
   for (const taskDoc of snapshot.docs) {
     const task = taskDoc.data() as Record<string, unknown>;
     const status = String(task.status || "todo");
-    const reminderRaw = String(task.reminderAt || task.dueAt || "");
-    const reminderAt = reminderRaw ? new Date(reminderRaw) : null;
-    if (
-      status === "completed" ||
-      status === "archived" ||
-      !reminderAt ||
-      Number.isNaN(reminderAt.getTime()) ||
-      reminderAt.getTime() > now.getTime()
-    ) {
+    const fireAt = effectiveFireAt(task);
+
+    if (status === "completed" || status === "archived" || !fireAt) {
+      skipped += 1;
+      continue;
+    }
+    if (fireAt.getTime() > now.getTime()) {
       skipped += 1;
       continue;
     }
 
-    const userRef = taskDoc.ref.parent.parent;
-    if (!userRef) {
+    const claimedAt = String(task.deliveryClaimedAt || "");
+    const claimedMs = claimedAt ? Date.parse(claimedAt) : 0;
+    if (claimedMs && now.getTime() - claimedMs < 4 * 60_000) {
       skipped += 1;
       continue;
     }
-
-    const tokenSnapshot = await userRef.collection("pushTokens").where("active", "==", true).get();
-    const tokenDocs = tokenSnapshot.docs.filter((item: any) => Boolean(item.data()?.token));
-    const tokens = tokenDocs.map((item: any) => String(item.data().token));
-    if (!tokens.length) {
+    try {
+      await taskDoc.ref.update({ deliveryClaimedAt: nowIso });
+    } catch {
       skipped += 1;
       continue;
     }
 
     try {
-      const taskId = taskDoc.id;
-      const title = String(task.title || "Personal task");
-      const body = String(task.notes || "Your task is due now.").slice(0, 180);
-      const response = await adminMessaging().sendEachForMulticast({
-        tokens,
-        data: {
-          taskId,
-          title: `Due now: ${title}`,
-          body,
-          priority: String(task.priority || "normal"),
-          url: `/dashboard/tasks?task=${encodeURIComponent(taskId)}`,
-        },
-        webpush: {
-          headers: { Urgency: task.priority === "urgent" ? "high" : "normal" },
-          notification: {
-            title: `Due now: ${title}`,
-            body,
-            icon: "/PCX Testing-11.svg",
-            badge: "/PCX Testing-11.svg",
-            tag: `crm-task-${taskId}`,
-            requireInteraction: task.priority === "urgent",
-            actions: [
-              { action: "open", title: "Open" },
-              { action: "complete", title: "Complete" },
-            ],
-            data: { taskId, url: `/dashboard/tasks?task=${encodeURIComponent(taskId)}` },
-          },
-          fcmOptions: {
-            link: `/dashboard/tasks?task=${encodeURIComponent(taskId)}`,
-          },
-        },
+      const phase = resolvePhase(task);
+      const result = await firePersonalTaskReminder({
+        taskRef: taskDoc.ref,
+        task,
+        phase,
+        now,
       });
-
-      const invalidCodes = new Set([
-        "messaging/registration-token-not-registered",
-        "messaging/invalid-registration-token",
-        "messaging/invalid-argument",
-      ]);
-      await Promise.all(
-        response.responses.map((result: any, index: number) => {
-          if (!result.success && invalidCodes.has(result.error?.code)) {
-            return tokenDocs[index].ref.delete();
-          }
-          return Promise.resolve();
-        })
-      );
-
-      if (response.successCount > 0) {
-        await taskDoc.ref.update({
-          notificationPending: false,
-          reminderSentAt: now.toISOString(),
-          updatedAt: now.toISOString(),
-        });
+      if (result.ok && result.sentDevices > 0) {
         sentTasks += 1;
-        sentDevices += response.successCount;
-      }
-      if (response.failureCount) {
-        errors.push(`${taskId}: ${response.failureCount} device delivery failure(s)`);
+        sentDevices += result.sentDevices;
+      } else {
+        skipped += 1;
+        if (!result.ok) errors.push(`${taskDoc.id}: ${result.error}`);
+        else await taskDoc.ref.update({ deliveryClaimedAt: null });
       }
     } catch (error) {
+      try {
+        await taskDoc.ref.update({ deliveryClaimedAt: null });
+      } catch {
+        /* ignore */
+      }
       errors.push(
         `${taskDoc.id}: ${error instanceof Error ? error.message : "unknown delivery error"}`
       );
@@ -128,12 +118,12 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    mode: "backup_poll",
     checked: snapshot.size,
     sentTasks,
     sentDevices,
     skipped,
     errors: errors.slice(0, 20),
-    at: now.toISOString(),
+    at: nowIso,
   });
 }
-

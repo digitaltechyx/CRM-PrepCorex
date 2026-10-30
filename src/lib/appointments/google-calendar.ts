@@ -304,6 +304,104 @@ export async function createAppointmentEvent(input: {
   };
 }
 
+export type GoogleCalendarEvent = {
+  id: string;
+  summary: string;
+  description: string | null;
+  location: string | null;
+  status: string;
+  htmlLink: string | null;
+  hangoutLink: string | null;
+  /** All-day events use YYYY-MM-DD; timed use ISO datetime */
+  startIso: string;
+  endIso: string;
+  allDay: boolean;
+  attendees: Array<{ email: string; displayName: string | null; responseStatus?: string }>;
+  /** True when created via PrepCorex public booking page */
+  isPrepCorexBooking: boolean;
+};
+
+function extractHangoutLink(item: Record<string, unknown>): string | null {
+  if (typeof item.hangoutLink === "string" && item.hangoutLink) return item.hangoutLink;
+  const conf = item.conferenceData as
+    | { entryPoints?: Array<{ entryPointType?: string; uri?: string }> }
+    | undefined;
+  const video = conf?.entryPoints?.find((e) => e.entryPointType === "video" && e.uri);
+  return video?.uri || null;
+}
+
+export async function listCalendarEvents(input: {
+  accessToken: string;
+  calendarId: string;
+  timeMinIso: string;
+  timeMaxIso: string;
+  timezone?: string;
+}): Promise<GoogleCalendarEvent[]> {
+  const data = await calFetch<{ items?: Array<Record<string, unknown>> }>(
+    `/calendars/${encodeURIComponent(input.calendarId)}/events`,
+    input.accessToken,
+    {
+      query: {
+        timeMin: input.timeMinIso,
+        timeMax: input.timeMaxIso,
+        singleEvents: "true",
+        orderBy: "startTime",
+        maxResults: "250",
+        ...(input.timezone ? { timeZone: input.timezone } : {}),
+      },
+    }
+  );
+
+  return (data.items || [])
+    .map((item) => {
+      const start = (item.start || {}) as { dateTime?: string; date?: string };
+      const end = (item.end || {}) as { dateTime?: string; date?: string };
+      const allDay = Boolean(start.date && !start.dateTime);
+      const startIso = String(start.dateTime || start.date || "");
+      const endIso = String(end.dateTime || end.date || "");
+      if (!startIso) return null;
+
+      const description =
+        typeof item.description === "string" ? item.description : null;
+      const summary = String(item.summary || "(No title)");
+
+      const attendeesRaw = Array.isArray(item.attendees) ? item.attendees : [];
+      const attendees = attendeesRaw
+        .map((a) => {
+          const row = a as Record<string, unknown>;
+          const email = String(row.email || "").trim();
+          if (!email) return null;
+          return {
+            email,
+            displayName: row.displayName != null ? String(row.displayName) : null,
+            responseStatus:
+              row.responseStatus != null ? String(row.responseStatus) : undefined,
+          };
+        })
+        .filter(Boolean) as GoogleCalendarEvent["attendees"];
+
+      return {
+        id: String(item.id || ""),
+        summary,
+        description,
+        location: typeof item.location === "string" ? item.location : null,
+        status: String(item.status || "confirmed"),
+        htmlLink: typeof item.htmlLink === "string" ? item.htmlLink : null,
+        hangoutLink: extractHangoutLink(item),
+        startIso,
+        endIso,
+        allDay,
+        attendees,
+        isPrepCorexBooking:
+          Boolean(description?.includes("Booked via PrepCorex")) ||
+          Boolean(
+            description?.includes("Guest:") && description?.includes("Email:")
+          ),
+      } satisfies GoogleCalendarEvent;
+    })
+    .filter(Boolean) as GoogleCalendarEvent[];
+}
+
 export function parseEmailFromOAuth(idToken: string | null) {
   return emailFromIdToken(idToken);
 }

@@ -79,7 +79,7 @@ export async function POST(request: NextRequest, ctx: Ctx) {
       `Guest: ${name}`,
       `Email: ${email}`,
       phone ? `Phone: ${phone}` : null,
-      notes ? `Notes: ${notes}` : null,
+      notes ? `Meeting agenda: ${notes}` : null,
     ].filter(Boolean);
 
     const event = await createAppointmentEvent({

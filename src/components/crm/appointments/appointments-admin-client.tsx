@@ -34,6 +34,7 @@ import {
   DEFAULT_SCHEDULE,
   WORK_WEEK_DAYS,
 } from "@/lib/appointments/types";
+import { AppointmentCalendarView } from "@/components/crm/appointments/appointment-calendar-view";
 
 type AdminSettings = {
   connected: boolean;
@@ -315,7 +316,7 @@ export function AppointmentsAdminClient() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div>
         <h1 className="font-headline text-3xl font-bold tracking-tight">Appointments</h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
@@ -324,6 +325,15 @@ export function AppointmentsAdminClient() {
           other meeting.
         </p>
       </div>
+
+      {settings?.connected && settings.calendarId ? (
+        <AppointmentCalendarView
+          enabled
+          calendarSummary={settings.calendarSummary}
+          timezone={schedule.timezone || "America/New_York"}
+          getAuthHeaders={authHeader}
+        />
+      ) : null}
 
       <Card>
         <CardHeader>

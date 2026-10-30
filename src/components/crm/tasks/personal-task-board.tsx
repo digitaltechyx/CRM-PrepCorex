@@ -328,6 +328,7 @@ function FreeStickyNote({
           ? undefined
           : (event) => onPointerDown(event.nativeEvent, task.id)
       }
+      onClick={isGrid ? () => onContentClick(task) : undefined}
       style={
         isGrid
           ? undefined
@@ -342,21 +343,21 @@ function FreeStickyNote({
             }
       }
       className={cn(
-        "group flex flex-col overflow-hidden rounded-[1.25rem] border p-4 text-slate-900 shadow-[0_18px_40px_-22px_rgba(15,23,42,0.5)] ring-1 ring-white/70 transition-[box-shadow,transform] duration-150 sm:p-5",
+        "group flex flex-col overflow-hidden border text-slate-900 shadow-[0_18px_40px_-22px_rgba(15,23,42,0.5)] ring-1 ring-white/70 transition-[box-shadow,transform] duration-150",
         color.card,
         overdue && "ring-2 ring-red-400/70",
         completed && "opacity-75 grayscale-[.15]",
         isGrid
-          ? "relative min-h-[200px] w-full touch-auto select-auto"
+          ? "relative min-h-0 w-full cursor-pointer touch-auto select-auto rounded-2xl p-2.5 active:scale-[0.98] sm:p-3"
           : cn(
-              "absolute min-h-[220px] touch-none select-none",
+              "absolute min-h-[220px] touch-none select-none rounded-[1.25rem] p-4 sm:p-5",
               "cursor-grab active:cursor-grabbing",
               isDragging && "shadow-2xl ring-2 ring-indigo-400/50"
             )
       )}
     >
       <div
-        className="absolute inset-x-0 top-0 h-1.5 opacity-80"
+        className={cn("absolute inset-x-0 top-0 opacity-80", isGrid ? "h-1" : "h-1.5")}
         style={{
           background:
             task.priority === "urgent"
@@ -368,51 +369,86 @@ function FreeStickyNote({
                   : "#3b82f6",
         }}
       />
-      <div className="flex items-start justify-between gap-2">
+      <div className={cn("flex items-start justify-between gap-1", isGrid ? "gap-1" : "gap-2")}>
         {isGrid ? (
-          <span className={cn("mt-1 h-2.5 w-2.5 shrink-0 rounded-full", color.dot)} />
+          <span className={cn("mt-0.5 h-2 w-2 shrink-0 rounded-full", color.dot)} />
         ) : (
           <div className="mt-0.5 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-slate-500/80">
             <GripVertical className="h-4 w-4" />
             <Move className="h-3.5 w-3.5 opacity-70" />
           </div>
         )}
-        <div className="flex flex-wrap justify-end gap-1.5">
-          <Badge variant="outline" className={cn("text-[10px] uppercase", priorityClass(task.priority))}>
-            {PRIORITY_LABELS[task.priority]}
+        <div className="flex min-w-0 flex-wrap justify-end gap-1">
+          <Badge
+            variant="outline"
+            className={cn(
+              "uppercase",
+              isGrid ? "px-1.5 py-0 text-[9px] leading-4" : "text-[10px]",
+              priorityClass(task.priority)
+            )}
+          >
+            {isGrid
+              ? task.priority === "urgent"
+                ? "!"
+                : task.priority === "high"
+                  ? "H"
+                  : task.priority === "low"
+                    ? "L"
+                    : "N"
+              : PRIORITY_LABELS[task.priority]}
           </Badge>
           {overdue ? (
-            <Badge className="border-0 bg-red-600 text-[10px] uppercase text-white">Overdue</Badge>
+            <Badge
+              className={cn(
+                "border-0 bg-red-600 uppercase text-white",
+                isGrid ? "px-1.5 py-0 text-[9px] leading-4" : "text-[10px]"
+              )}
+            >
+              {isGrid ? "Late" : "Overdue"}
+            </Badge>
           ) : null}
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => onContentClick(task)}
-        className={cn(
-          "mt-3 min-w-0 flex-1 text-left",
-          isGrid ? "cursor-pointer" : "cursor-inherit"
-        )}
-      >
-        <h3
-          className={cn(
-            "font-headline text-lg font-bold leading-snug tracking-tight text-slate-900",
-            completed && "line-through decoration-2"
-          )}
-        >
-          {task.title}
-        </h3>
-        {task.notes ? (
-          <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-            {task.notes}
+      {isGrid ? (
+        <div className="mt-1.5 min-w-0 flex-1 text-left">
+          <h3
+            className={cn(
+              "font-headline line-clamp-2 text-[13px] font-bold leading-snug tracking-tight text-slate-900 sm:text-sm",
+              completed && "line-through decoration-2"
+            )}
+          >
+            {task.title}
+          </h3>
+          <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-slate-600">
+            {task.notes?.trim() || "Tap to open"}
           </p>
-        ) : (
-          <p className="mt-2 text-sm italic text-slate-500/80">Tap to add details…</p>
-        )}
-      </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onContentClick(task)}
+          className="mt-3 min-w-0 flex-1 cursor-inherit text-left"
+        >
+          <h3
+            className={cn(
+              "font-headline text-lg font-bold leading-snug tracking-tight text-slate-900",
+              completed && "line-through decoration-2"
+            )}
+          >
+            {task.title}
+          </h3>
+          {task.notes ? (
+            <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+              {task.notes}
+            </p>
+          ) : (
+            <p className="mt-2 text-sm italic text-slate-500/80">Tap to add details…</p>
+          )}
+        </button>
+      )}
 
-      {task.tags?.length ? (
+      {!isGrid && task.tags?.length ? (
         <div className="mt-3 flex flex-wrap gap-1">
           {task.tags.slice(0, 3).map((tag) => (
             <span
@@ -428,34 +464,51 @@ function FreeStickyNote({
 
       <div
         data-note-actions
-        className="mt-4 flex items-center justify-between gap-2 border-t border-slate-900/10 pt-3 touch-auto"
+        className={cn(
+          "flex items-center justify-between gap-1 border-t border-slate-900/10 touch-auto",
+          isGrid ? "mt-2 pt-2" : "mt-4 gap-2 pt-3"
+        )}
         onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
-        <div className={cn("flex min-w-0 items-center gap-1.5 text-xs font-semibold", overdue ? "text-red-700" : "text-slate-600")}>
-          <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+        <div
+          className={cn(
+            "flex min-w-0 items-center gap-1 font-semibold",
+            isGrid ? "text-[10px]" : "gap-1.5 text-xs",
+            overdue ? "text-red-700" : "text-slate-600"
+          )}
+        >
+          <CalendarClock className={cn("shrink-0", isGrid ? "h-3 w-3" : "h-3.5 w-3.5")} />
           <span className="truncate" title={scheduleLabel(task)}>
             {scheduleLabel(task)}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-1 touch-auto">
+        <div className="flex shrink-0 items-center gap-0.5 touch-auto">
           {completed ? (
             <Button
               size="icon"
               variant="ghost"
-              className="h-8 w-8 rounded-full bg-white/55 text-slate-700 hover:bg-white"
+              className={cn(
+                "rounded-full bg-white/55 text-slate-700 hover:bg-white",
+                isGrid ? "h-7 w-7" : "h-8 w-8"
+              )}
               onClick={() => onReopen(task)}
               title="Reopen"
             >
-              <RotateCcw className="h-4 w-4" />
+              <RotateCcw className={isGrid ? "h-3.5 w-3.5" : "h-4 w-4"} />
             </Button>
           ) : (
             <Button
-              size="sm"
-              className="h-8 gap-1 rounded-full bg-slate-900 px-3 text-xs text-white shadow-sm hover:bg-slate-800"
+              size={isGrid ? "icon" : "sm"}
+              className={cn(
+                "rounded-full bg-slate-900 text-white shadow-sm hover:bg-slate-800",
+                isGrid ? "h-7 w-7" : "h-8 gap-1 px-3 text-xs"
+              )}
               onClick={() => onComplete(task)}
+              title="Complete"
             >
-              <Check className="h-3.5 w-3.5" />
-              Complete
+              <Check className={isGrid ? "h-3.5 w-3.5" : "h-3.5 w-3.5"} />
+              {isGrid ? null : "Complete"}
             </Button>
           )}
           <DropdownMenu>
@@ -463,15 +516,18 @@ function FreeStickyNote({
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-8 w-8 rounded-full bg-white/55 text-slate-700 hover:bg-white"
+                className={cn(
+                  "rounded-full bg-white/55 text-slate-700 hover:bg-white",
+                  isGrid ? "h-7 w-7" : "h-8 w-8"
+                )}
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <MoreHorizontal className={isGrid ? "h-3.5 w-3.5" : "h-4 w-4"} />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => onEdit(task)}>
                 <Pencil className="mr-2 h-4 w-4" />
-                Edit
+                Open / edit
               </DropdownMenuItem>
               {!completed ? (
                 <>
@@ -1151,12 +1207,12 @@ export function PersonalTaskBoard() {
             <div className="flex items-center justify-between gap-3 border-b border-amber-900/10 bg-[#efe4c4]/80 px-4 py-2.5 text-xs font-semibold text-amber-950/70">
               <span className="inline-flex items-center gap-1.5">
                 <LayoutGrid className="h-3.5 w-3.5" />
-                Grid view — tap a note to edit
+                2-column grid — tap a note to open details
               </span>
               <span>{visibleTasks.length}</span>
             </div>
             <div
-              className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 sm:gap-4 sm:p-4"
+              className="grid grid-cols-2 gap-2 p-2.5 sm:gap-3 sm:p-4"
               style={{
                 backgroundImage:
                   "radial-gradient(rgba(120, 83, 40, 0.12) 1px, transparent 1px)",

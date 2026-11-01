@@ -78,40 +78,8 @@ exports.syncCrmTaskReminderCloudTasks = functions
   });
 
 /**
- * Backup only — every 6 hours. Catches anything Cloud Tasks missed.
- * Do not use this as the main on-time delivery path.
+ * sendCrmTaskRemindersBackup was removed (2026-11-02).
+ * It called a personalTasks collectionGroup poll and added Firestore cost.
+ * Reminders now use Cloud Tasks only → /api/tasks/reminders/fire.
+ * Do not re-add a scheduled collectionGroup scanner.
  */
-exports.sendCrmTaskRemindersBackup = functions
-  .runWith({ timeoutSeconds: 120, memory: "256MB" })
-  .pubsub.schedule("every 6 hours")
-  .timeZone(TZ_NEW_JERSEY)
-  .onRun(async () => {
-    const url = String(
-      process.env.TASK_REMINDERS_URL ||
-        "https://crm.prepservicesfba.com/api/tasks/reminders"
-    ).trim();
-    const secret = String(process.env.CRON_SECRET || "").trim();
-
-    if (!secret) {
-      console.warn("[CRM task reminders backup] CRON_SECRET not set; skipping.");
-      return null;
-    }
-
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${secret}`,
-      },
-    });
-    const body = await res.text();
-    if (!res.ok) {
-      console.error(
-        "[CRM task reminders backup] HTTP",
-        res.status,
-        body.slice(0, 800)
-      );
-      throw new Error(`CRM task reminders backup failed with HTTP ${res.status}`);
-    }
-    console.log("[CRM task reminders backup] ok", body.slice(0, 800));
-    return null;
-  });

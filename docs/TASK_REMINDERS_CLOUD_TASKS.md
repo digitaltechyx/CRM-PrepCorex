@@ -42,7 +42,10 @@ Set in `functions/.env` or Firebase Functions config:
 ```bash
 cd functions
 npm install
-firebase deploy --only functions:syncCrmTaskReminderCloudTasks,functions:sendCrmTaskRemindersBackup
+firebase deploy --only functions:syncCrmTaskReminderCloudTasks
+
+# Delete the old collectionGroup backup poller if it still exists (cost):
+# firebase functions:delete sendCrmTaskRemindersBackup --project psf-stockflow --force
 ```
 
 Also deploy the CRM Next app so `/api/tasks/reminders/fire` exists.

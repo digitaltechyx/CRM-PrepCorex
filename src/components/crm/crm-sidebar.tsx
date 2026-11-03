@@ -37,6 +37,7 @@ const nav = [
   { title: "Pipeline", href: "/dashboard/settings/pipeline", icon: Columns3 },
   { title: "Quote management", href: "/dashboard/quotes", icon: Briefcase },
   { title: "Invoice management", href: "/dashboard/invoice-portal", icon: Receipt },
+  { title: "Invoice sync", href: "/dashboard/invoice-sync", icon: Receipt },
 ];
 
 const COLLAPSE_KEY = "crm-sidebar-collapsed";

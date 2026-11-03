@@ -20,6 +20,10 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { readFetchError } from "@/lib/invoice-utils";
 import { MERCURY_INTEGRATION_ENABLED } from "@/lib/mercury-feature";
+import {
+  CRM_INVOICE_FILL_STORAGE_KEY,
+  type CrmInvoiceFillPayload,
+} from "@/lib/prepcorex-invoice-sync";
 import { cn } from "@/lib/utils";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
 import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
@@ -466,7 +470,72 @@ export function InvoiceManagementPortal() {
   const [formData, setFormData] = useState(createEmptyInvoiceForm());
   const [clientLookup, setClientLookup] = useState("");
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
+  const prepcorexFillAppliedRef = useRef(false);
   const [saving, setSaving] = useState(false);
+
+  // Apply PrepCorex Invoice Sync → existing template fill (merged line items).
+  useEffect(() => {
+    if (prepcorexFillAppliedRef.current) return;
+    if (typeof window === "undefined") return;
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(CRM_INVOICE_FILL_STORAGE_KEY);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    prepcorexFillAppliedRef.current = true;
+    try {
+      sessionStorage.removeItem(CRM_INVOICE_FILL_STORAGE_KEY);
+      const payload = JSON.parse(raw) as CrmInvoiceFillPayload;
+      if (!payload || payload.version !== 1 || !Array.isArray(payload.items)) return;
+
+      const base = createEmptyInvoiceForm();
+      const items = payload.items.map((item) => ({
+        id: item.id || crypto.randomUUID(),
+        description: String(item.description || ""),
+        quantity: Number(item.quantity) || 1,
+        unitPrice: Number(item.unitPrice) || 0,
+        compareUnitPrice: Number(item.compareUnitPrice) || 0,
+        amount: Number(item.amount) || 0,
+      }));
+      const subtotal = items.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+      setFormData({
+        ...base,
+        clientName: payload.clientName || "",
+        clientEmail: payload.clientEmail || "",
+        clientPhone: payload.clientPhone || "",
+        clientAddress: payload.clientAddress || "",
+        invoiceDate: payload.invoiceDate || base.invoiceDate,
+        dueDate: payload.dueDate || base.dueDate,
+        items: items.length > 0 ? items : base.items,
+        shippingLabelItems: [],
+        subtotal,
+        salesTax: 0,
+        shippingCost: 0,
+        total: subtotal,
+        amountPaid: 0,
+        outstandingBalance: subtotal + (Number(payload.lateFee) || 0),
+        discountType: payload.discountType,
+        discountValue: payload.discountValue,
+        lateFee: payload.lateFee || 0,
+        invoiceNote: payload.invoiceNote || base.invoiceNote,
+        status: "draft",
+      });
+      setEditingInvoiceId(null);
+      setActiveTab("new");
+      toast({
+        title: "Template filled from PrepCorex",
+        description:
+          payload.sourceInvoiceNumbers?.length > 0
+            ? `Merged ${payload.sourceInvoiceNumbers.length} invoice(s): ${payload.sourceInvoiceNumbers.join(", ")}`
+            : "Line items were loaded into the invoice template.",
+      });
+    } catch (error) {
+      console.warn("PrepCorex invoice fill failed", error);
+      prepcorexFillAppliedRef.current = false;
+    }
+  }, [toast]);
   const [searchQuery, setSearchQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");

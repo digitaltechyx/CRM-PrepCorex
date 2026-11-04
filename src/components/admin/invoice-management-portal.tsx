@@ -485,7 +485,22 @@ export function InvoiceManagementPortal() {
   const [lineCatalogLoading, setLineCatalogLoading] = useState(false);
   const [lineCatalogBusy, setLineCatalogBusy] = useState(false);
   const [lineCatalogDialogOpen, setLineCatalogDialogOpen] = useState(false);
+  const [manualCatalogForm, setManualCatalogForm] = useState({
+    description: "",
+    quantity: "1",
+    compareUnitPrice: "",
+    unitPrice: "",
+  });
   const ownerUid = userProfile?.uid || user?.uid || "";
+
+  const resetManualCatalogForm = () => {
+    setManualCatalogForm({
+      description: "",
+      quantity: "1",
+      compareUnitPrice: "",
+      unitPrice: "",
+    });
+  };
 
   const refreshLineCatalog = useCallback(async () => {
     if (!ownerUid) {
@@ -1063,34 +1078,40 @@ export function InvoiceManagementPortal() {
     });
   };
 
-  const saveItemToCatalog = async (item: ExternalInvoiceItem) => {
+  const saveCatalogFields = async (fields: {
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    compareUnitPrice: number;
+  }): Promise<boolean> => {
     if (!ownerUid) {
       toast({
         title: "Sign in required",
         description: "Sign in to save lines to your catalog.",
         variant: "destructive",
       });
-      return;
+      return false;
     }
-    const description = (item.description || "").trim();
+    const description = (fields.description || "").trim();
     if (!description) {
       toast({
         title: "Description required",
         description: "Enter a description before saving to your catalog.",
         variant: "destructive",
       });
-      return;
+      return false;
     }
     setLineCatalogBusy(true);
     try {
       await addInvoiceCatalogLine(ownerUid, {
         description,
-        quantity: Number(item.quantity) || 0,
-        unitPrice: Number(item.unitPrice) || 0,
-        compareUnitPrice: Number(item.compareUnitPrice) || 0,
+        quantity: Number(fields.quantity) || 0,
+        unitPrice: Number(fields.unitPrice) || 0,
+        compareUnitPrice: Number(fields.compareUnitPrice) || 0,
       });
       await refreshLineCatalog();
       toast({ title: "Saved to your catalog" });
+      return true;
     } catch (err) {
       console.error("Failed to save catalog line", err);
       toast({
@@ -1098,9 +1119,29 @@ export function InvoiceManagementPortal() {
         description: "Could not save this line to your catalog.",
         variant: "destructive",
       });
+      return false;
     } finally {
       setLineCatalogBusy(false);
     }
+  };
+
+  const saveItemToCatalog = async (item: ExternalInvoiceItem) => {
+    await saveCatalogFields({
+      description: item.description || "",
+      quantity: Number(item.quantity) || 0,
+      unitPrice: Number(item.unitPrice) || 0,
+      compareUnitPrice: Number(item.compareUnitPrice) || 0,
+    });
+  };
+
+  const saveManualCatalogLine = async () => {
+    const ok = await saveCatalogFields({
+      description: manualCatalogForm.description,
+      quantity: toNumber(manualCatalogForm.quantity) || 1,
+      unitPrice: toNumber(manualCatalogForm.unitPrice),
+      compareUnitPrice: toNumber(manualCatalogForm.compareUnitPrice),
+    });
+    if (ok) resetManualCatalogForm();
   };
 
   const removeCatalogLine = async (lineId: string) => {
@@ -5605,25 +5646,109 @@ Prep Services FBA Team`;
         </DialogContent>
       </Dialog>
 
-      <Dialog open={lineCatalogDialogOpen} onOpenChange={setLineCatalogDialogOpen}>
+      <Dialog
+        open={lineCatalogDialogOpen}
+        onOpenChange={(open) => {
+          setLineCatalogDialogOpen(open);
+          if (!open) resetManualCatalogForm();
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>My invoice line catalog</DialogTitle>
             <DialogDescription>
-              Saved lines are only yours. Pick one on any invoice line to fill description, qty,
-              market price, and your price.
+              Saved lines are only yours. Add them here manually, or pick one on any invoice line to
+              fill description, qty, market price, and your price.
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+          <div className="space-y-3 rounded-md border border-amber-200/70 bg-amber-50/30 p-3">
+            <p className="text-sm font-medium text-amber-900">Add line manually</p>
+            <div className="space-y-1">
+              <Label htmlFor="manual-catalog-description">Description</Label>
+              <Textarea
+                id="manual-catalog-description"
+                value={manualCatalogForm.description}
+                onChange={(event) =>
+                  setManualCatalogForm((prev) => ({ ...prev, description: event.target.value }))
+                }
+                placeholder="Item description"
+                rows={2}
+                className="min-h-9 border-amber-200/70 resize-y"
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="manual-catalog-qty">Qty</Label>
+                <Input
+                  id="manual-catalog-qty"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={manualCatalogForm.quantity}
+                  onChange={(event) =>
+                    setManualCatalogForm((prev) => ({ ...prev, quantity: event.target.value }))
+                  }
+                  className="h-9 border-amber-200/70"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manual-catalog-market">Est. market $</Label>
+                <Input
+                  id="manual-catalog-market"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={manualCatalogForm.compareUnitPrice}
+                  onChange={(event) =>
+                    setManualCatalogForm((prev) => ({
+                      ...prev,
+                      compareUnitPrice: event.target.value,
+                    }))
+                  }
+                  className="h-9 border-amber-200/70"
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manual-catalog-price">Your price $</Label>
+                <Input
+                  id="manual-catalog-price"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={manualCatalogForm.unitPrice}
+                  onChange={(event) =>
+                    setManualCatalogForm((prev) => ({ ...prev, unitPrice: event.target.value }))
+                  }
+                  className="h-9 border-amber-200/70"
+                  placeholder="0.00"
+                />
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              className="bg-amber-700 hover:bg-amber-800"
+              disabled={lineCatalogBusy || !manualCatalogForm.description.trim()}
+              onClick={() => void saveManualCatalogLine()}
+            >
+              {lineCatalogBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+              ) : (
+                <BookmarkPlus className="h-4 w-4 mr-1" />
+              )}
+              Save to my catalog
+            </Button>
+          </div>
+          <div className="max-h-[40vh] space-y-2 overflow-y-auto pr-1">
             {lineCatalogLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 justify-center">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Loading…
               </div>
             ) : lineCatalog.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-6 text-center">
-                No saved lines yet. Fill a line on the invoice and tap the bookmark button to save
-                it.
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                No saved lines yet. Use the form above to add one.
               </p>
             ) : (
               lineCatalog.map((row) => (

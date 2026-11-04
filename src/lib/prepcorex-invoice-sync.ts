@@ -88,13 +88,10 @@ function money(n: unknown): number {
   return Number.isFinite(v) ? Math.round(v * 100) / 100 : 0;
 }
 
-function lineDescription(line: PrepcorexSyncLineItem, invoiceNumber: string): string {
+function lineDescription(line: PrepcorexSyncLineItem): string {
   const parts = [
     String(line.productName || "").trim() || "Line item",
-    line.packaging ? String(line.packaging).trim() : "",
-    line.shipTo ? `Ship to: ${String(line.shipTo).trim()}` : "",
     line.shipDate ? `Ship date: ${String(line.shipDate).trim()}` : "",
-    invoiceNumber ? `Source: ${invoiceNumber}` : "",
   ].filter(Boolean);
   return parts.join(" · ");
 }
@@ -123,14 +120,13 @@ export function buildCrmInvoiceFillPayload(
   const items: CrmInvoiceFillItem[] = [];
 
   for (const doc of sorted) {
-    const invNo = String(doc.invoiceNumber || doc.sourceInvoiceId || "").trim();
     for (const line of doc.items || []) {
       const quantity = Math.max(0, Number(line.quantity) || 0);
       const unitPrice = money(line.unitPrice);
       const amount = money(line.amount != null ? line.amount : quantity * unitPrice);
       items.push({
         id: newItemId(),
-        description: lineDescription(line, invNo),
+        description: lineDescription(line),
         quantity: quantity || 1,
         unitPrice,
         compareUnitPrice: 0,
@@ -142,7 +138,7 @@ export function buildCrmInvoiceFillPayload(
       if (!amount) continue;
       items.push({
         id: newItemId(),
-        description: `${String(charge.name || "Additional charge").trim()} · Source: ${invNo}`,
+        description: String(charge.name || "Additional charge").trim(),
         quantity: 1,
         unitPrice: amount,
         compareUnitPrice: 0,

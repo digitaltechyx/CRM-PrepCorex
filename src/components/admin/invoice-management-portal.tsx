@@ -24,6 +24,13 @@ import {
   CRM_INVOICE_FILL_STORAGE_KEY,
   type CrmInvoiceFillPayload,
 } from "@/lib/prepcorex-invoice-sync";
+import {
+  addInvoiceCatalogLine,
+  catalogLineLabel,
+  deleteInvoiceCatalogLine,
+  listInvoiceCatalogLines,
+  type CrmInvoiceCatalogLine,
+} from "@/lib/crm-invoice-line-catalog";
 import { cn } from "@/lib/utils";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
 import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
@@ -57,6 +64,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   AlertTriangle,
   BadgeDollarSign,
+  BookmarkPlus,
   CheckCircle,
   CircleArrowLeft,
   Clock,
@@ -64,6 +72,7 @@ import {
   Download,
   FileText,
   Globe,
+  Library,
   Loader2,
   Mail,
   Percent,
@@ -472,6 +481,36 @@ export function InvoiceManagementPortal() {
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const prepcorexFillAppliedRef = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [lineCatalog, setLineCatalog] = useState<CrmInvoiceCatalogLine[]>([]);
+  const [lineCatalogLoading, setLineCatalogLoading] = useState(false);
+  const [lineCatalogBusy, setLineCatalogBusy] = useState(false);
+  const [lineCatalogDialogOpen, setLineCatalogDialogOpen] = useState(false);
+  const ownerUid = userProfile?.uid || user?.uid || "";
+
+  const refreshLineCatalog = useCallback(async () => {
+    if (!ownerUid) {
+      setLineCatalog([]);
+      return;
+    }
+    setLineCatalogLoading(true);
+    try {
+      const rows = await listInvoiceCatalogLines(ownerUid);
+      setLineCatalog(rows);
+    } catch (err) {
+      console.error("Failed to load invoice line catalog", err);
+      toast({
+        title: "Catalog load failed",
+        description: "Could not load your saved invoice lines.",
+        variant: "destructive",
+      });
+    } finally {
+      setLineCatalogLoading(false);
+    }
+  }, [ownerUid, toast]);
+
+  useEffect(() => {
+    void refreshLineCatalog();
+  }, [refreshLineCatalog]);
 
   // Apply PrepCorex Invoice Sync → existing template fill (merged line items).
   useEffect(() => {
@@ -973,6 +1012,114 @@ export function InvoiceManagementPortal() {
         ),
       };
     });
+  };
+
+  const applyCatalogLineToItem = (itemId: string, catalogId: string) => {
+    const catalog = lineCatalog.find((row) => row.id === catalogId);
+    if (!catalog) return;
+    setFormData((prev) => {
+      const nextItems = prev.items.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              description: catalog.description,
+              quantity: Number(catalog.quantity) || 0,
+              unitPrice: Number(catalog.unitPrice) || 0,
+              compareUnitPrice: Number(catalog.compareUnitPrice) || 0,
+            }
+          : item
+      );
+      return {
+        ...prev,
+        ...recalculateTotals(
+          nextItems,
+          prev.shippingLabelItems || [],
+          toNumber(prev.shippingCost),
+          prev.salesTax
+        ),
+      };
+    });
+  };
+
+  const applyCatalogLineToShippingLabel = (itemId: string, catalogId: string) => {
+    const catalog = lineCatalog.find((row) => row.id === catalogId);
+    if (!catalog) return;
+    setFormData((prev) => {
+      const nextLabels = (prev.shippingLabelItems || []).map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              description: catalog.description,
+              quantity: Number(catalog.quantity) || 0,
+              unitPrice: Number(catalog.unitPrice) || 0,
+              compareUnitPrice: Number(catalog.compareUnitPrice) || 0,
+            }
+          : item
+      );
+      return {
+        ...prev,
+        ...recalculateTotals(prev.items, nextLabels, toNumber(prev.shippingCost), prev.salesTax),
+      };
+    });
+  };
+
+  const saveItemToCatalog = async (item: ExternalInvoiceItem) => {
+    if (!ownerUid) {
+      toast({
+        title: "Sign in required",
+        description: "Sign in to save lines to your catalog.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const description = (item.description || "").trim();
+    if (!description) {
+      toast({
+        title: "Description required",
+        description: "Enter a description before saving to your catalog.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setLineCatalogBusy(true);
+    try {
+      await addInvoiceCatalogLine(ownerUid, {
+        description,
+        quantity: Number(item.quantity) || 0,
+        unitPrice: Number(item.unitPrice) || 0,
+        compareUnitPrice: Number(item.compareUnitPrice) || 0,
+      });
+      await refreshLineCatalog();
+      toast({ title: "Saved to your catalog" });
+    } catch (err) {
+      console.error("Failed to save catalog line", err);
+      toast({
+        title: "Save failed",
+        description: "Could not save this line to your catalog.",
+        variant: "destructive",
+      });
+    } finally {
+      setLineCatalogBusy(false);
+    }
+  };
+
+  const removeCatalogLine = async (lineId: string) => {
+    if (!ownerUid) return;
+    setLineCatalogBusy(true);
+    try {
+      await deleteInvoiceCatalogLine(ownerUid, lineId);
+      setLineCatalog((prev) => prev.filter((row) => row.id !== lineId));
+      toast({ title: "Removed from catalog" });
+    } catch (err) {
+      console.error("Failed to delete catalog line", err);
+      toast({
+        title: "Delete failed",
+        description: "Could not remove that catalog line.",
+        variant: "destructive",
+      });
+    } finally {
+      setLineCatalogBusy(false);
+    }
   };
 
   const updateShippingLabelItem = (
@@ -3771,7 +3918,22 @@ Prep Services FBA Team`;
                 </div>
 
                 <div className="space-y-3">
-                  <h3 className="font-semibold text-amber-900">Services</h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-semibold text-amber-900">Services</h3>
+                    {!isPrintMode ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 border-amber-200/70"
+                        onClick={() => setLineCatalogDialogOpen(true)}
+                      >
+                        <Library className="h-4 w-4 mr-1" />
+                        My catalog
+                        {lineCatalog.length > 0 ? ` (${lineCatalog.length})` : ""}
+                      </Button>
+                    ) : null}
+                  </div>
                   {/* Desktop header - hidden on mobile where each row has its own labels */}
                   <div className="hidden md:grid grid-cols-12 gap-2 items-center border-b border-amber-200/70 pb-2">
                     <div className="col-span-4 pr-2">
@@ -3806,13 +3968,54 @@ Prep Services FBA Team`;
                         {isPrintMode ? (
                           <p className="text-sm whitespace-pre-wrap break-words">{item.description || "—"}</p>
                         ) : (
-                          <Textarea
-                            value={item.description}
-                            onChange={(event) => updateItem(item.id, "description", event.target.value)}
-                            placeholder="Item description"
-                            rows={2}
-                            className="min-h-9 border-amber-200/70 w-full resize-y"
-                          />
+                          <>
+                            <div className="flex gap-1.5 items-center">
+                              <Select
+                                onValueChange={(catalogId) => {
+                                  if (!catalogId) return;
+                                  applyCatalogLineToItem(item.id, catalogId);
+                                }}
+                                disabled={lineCatalogLoading || lineCatalog.length === 0}
+                              >
+                                <SelectTrigger className="h-8 text-xs border-amber-200/70 flex-1 min-w-0">
+                                  <SelectValue
+                                    placeholder={
+                                      lineCatalogLoading
+                                        ? "Loading catalog…"
+                                        : lineCatalog.length
+                                          ? "Fill from my catalog"
+                                          : "No saved lines yet"
+                                    }
+                                  />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {lineCatalog.map((row) => (
+                                    <SelectItem key={row.id} value={row.id}>
+                                      {catalogLineLabel(row)}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 shrink-0 border-amber-200/70 px-2"
+                                title="Save this line to my catalog"
+                                disabled={lineCatalogBusy || !(item.description || "").trim()}
+                                onClick={() => void saveItemToCatalog(item)}
+                              >
+                                <BookmarkPlus className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            <Textarea
+                              value={item.description}
+                              onChange={(event) => updateItem(item.id, "description", event.target.value)}
+                              placeholder="Item description"
+                              rows={2}
+                              className="min-h-9 border-amber-200/70 w-full resize-y"
+                            />
+                          </>
                         )}
                       </div>
                       <div className="md:col-span-1 space-y-1">
@@ -3945,15 +4148,54 @@ Prep Services FBA Team`;
                               {item.description || "—"}
                             </p>
                           ) : (
-                            <Textarea
-                              value={item.description}
-                              onChange={(event) =>
-                                updateShippingLabelItem(item.id, "description", event.target.value)
-                              }
-                              placeholder="Shipping label description"
-                              rows={2}
-                              className="min-h-9 border-amber-200/70 w-full resize-y"
-                            />
+                            <>
+                              <div className="flex gap-1.5 items-center">
+                                <Select
+                                  onValueChange={(catalogId) => {
+                                    if (!catalogId) return;
+                                    applyCatalogLineToShippingLabel(item.id, catalogId);
+                                  }}
+                                  disabled={lineCatalogLoading || lineCatalog.length === 0}
+                                >
+                                  <SelectTrigger className="h-8 text-xs border-amber-200/70 flex-1 min-w-0">
+                                    <SelectValue
+                                      placeholder={
+                                        lineCatalog.length
+                                          ? "Fill from my catalog"
+                                          : "No saved lines yet"
+                                      }
+                                    />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {lineCatalog.map((row) => (
+                                      <SelectItem key={row.id} value={row.id}>
+                                        {catalogLineLabel(row)}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 shrink-0 border-amber-200/70 px-2"
+                                  title="Save this line to my catalog"
+                                  disabled={lineCatalogBusy || !(item.description || "").trim()}
+                                  onClick={() => void saveItemToCatalog(item)}
+                                >
+                                  <BookmarkPlus className="h-4 w-4" />
+                                </Button>
+                              </div>
+                              <Textarea
+                                value={item.description}
+                                onChange={(event) =>
+                                  updateShippingLabelItem(item.id, "description", event.target.value)
+                                }
+                                placeholder="Shipping label description"
+                                rows={2}
+                                className="min-h-9 border-amber-200/70 w-full resize-y"
+                              />
+                            </>
                           )}
                         </div>
                         <div className="md:col-span-1 space-y-1">
@@ -5358,6 +5600,66 @@ Prep Services FBA Team`;
               {discountInvoice?.lateFee != null && discountInvoice.lateFee > 0 && (lateFeeAction === "remove" || lateFeeAction === "change")
                 ? "Update late fee / discount"
                 : "Apply Discount"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={lineCatalogDialogOpen} onOpenChange={setLineCatalogDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>My invoice line catalog</DialogTitle>
+            <DialogDescription>
+              Saved lines are only yours. Pick one on any invoice line to fill description, qty,
+              market price, and your price.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+            {lineCatalogLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 justify-center">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading…
+              </div>
+            ) : lineCatalog.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                No saved lines yet. Fill a line on the invoice and tap the bookmark button to save
+                it.
+              </p>
+            ) : (
+              lineCatalog.map((row) => (
+                <div
+                  key={row.id}
+                  className="rounded-md border border-amber-100 bg-amber-50/40 p-3 space-y-1"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-sm font-medium text-amber-950 whitespace-pre-wrap break-words">
+                        {row.description || "—"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Qty {Number(row.quantity) || 0} · Market $
+                        {Number(row.compareUnitPrice || 0).toFixed(2)} · Your $
+                        {Number(row.unitPrice || 0).toFixed(2)}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      className="shrink-0"
+                      disabled={lineCatalogBusy}
+                      onClick={() => void removeCatalogLine(row.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLineCatalogDialogOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,6 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import jsPDF from "jspdf";
 import {
   addDoc,
@@ -32,6 +47,7 @@ import {
   type CrmInvoiceCatalogLine,
 } from "@/lib/crm-invoice-line-catalog";
 import { cn } from "@/lib/utils";
+import { SortableInvoiceLineRow } from "@/components/admin/sortable-invoice-line-row";
 import { generateQuoteInvoicePdfBlob } from "@/lib/quote-invoice-generator";
 import { quotationInvoiceLogoSrc } from "@/lib/quotation-invoice-logo";
 import {
@@ -48,6 +64,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -201,6 +218,12 @@ interface ExternalInvoice {
   mercuryPaymentUrl?: string;
   mercuryInvoiceStatus?: string;
   mercurySyncedAt?: any;
+  /** PrepCorex client uid when this draft was auto-built from outbound. */
+  prepcorexClientUserId?: string | null;
+  billingSource?: string | null;
+  consolidationKey?: string | null;
+  prepcorexMirroredInvoiceId?: string | null;
+  showInPrepcorex?: boolean | null;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -479,6 +502,10 @@ export function InvoiceManagementPortal() {
 
   const [activeTab, setActiveTab] = useState("new");
   const [formData, setFormData] = useState(createEmptyInvoiceForm());
+  const invoiceLineSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
   const [clientLookup, setClientLookup] = useState("");
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const prepcorexFillAppliedRef = useRef(false);
@@ -598,6 +625,7 @@ export function InvoiceManagementPortal() {
   const [emailLogSearch, setEmailLogSearch] = useState("");
 
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [mirrorToPrepcorex, setMirrorToPrepcorex] = useState(false);
   const [emailForm, setEmailForm] = useState({
     to: "",
     subject: "",
@@ -1028,6 +1056,25 @@ export function InvoiceManagementPortal() {
           prev.salesTax
         ),
       };
+    });
+  };
+
+  const reorderItems = (activeId: string, overId: string) => {
+    setFormData((prev) => {
+      const oldIndex = prev.items.findIndex((item) => item.id === activeId);
+      const newIndex = prev.items.findIndex((item) => item.id === overId);
+      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return prev;
+      return { ...prev, items: arrayMove(prev.items, oldIndex, newIndex) };
+    });
+  };
+
+  const reorderShippingLabelItems = (activeId: string, overId: string) => {
+    setFormData((prev) => {
+      const labels = prev.shippingLabelItems || [];
+      const oldIndex = labels.findIndex((item) => item.id === activeId);
+      const newIndex = labels.findIndex((item) => item.id === overId);
+      if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return prev;
+      return { ...prev, shippingLabelItems: arrayMove(labels, oldIndex, newIndex) };
     });
   };
 
@@ -2413,6 +2460,9 @@ Prep Services FBA Team`;
       message: defaultMessage,
       attachments: [],
     });
+    setMirrorToPrepcorex(
+      Boolean(invoice.prepcorexClientUserId) && !invoice.prepcorexMirroredInvoiceId
+    );
     setEmailDialogOpen(true);
   };
 
@@ -2585,6 +2635,28 @@ Prep Services FBA Team`;
         updatedAt: serverTimestamp(),
       });
 
+      let mirroredNote: string | undefined;
+      if (
+        mirrorToPrepcorex &&
+        activeEmailInvoice.prepcorexClientUserId &&
+        !activeEmailInvoice.prepcorexMirroredInvoiceId
+      ) {
+        try {
+          const { mirrorCrmInvoiceToPrepcorex } = await import(
+            "@/lib/mirror-crm-invoice-to-prepcorex"
+          );
+          await mirrorCrmInvoiceToPrepcorex({
+            clientUserId: activeEmailInvoice.prepcorexClientUserId,
+            invoice: activeEmailInvoice,
+          });
+          mirroredNote = "Also shown in PrepCorex client invoices.";
+        } catch (mirrorErr) {
+          console.error("PrepCorex mirror failed", mirrorErr);
+          mirroredNote =
+            "Email sent, but PrepCorex mirror failed — you can retry from support.";
+        }
+      }
+
       await logInvoiceEmail({
         to: emailForm.to.trim(),
         subject: emailForm.subject.trim(),
@@ -2603,9 +2675,9 @@ Prep Services FBA Team`;
       const landedOverdue = isOverdueInvoice(sentInvoice);
       toast({
         title: "Invoice sent.",
-        description: landedOverdue
-          ? "Due date is past — it also appears under Overdue."
-          : undefined,
+        description:
+          mirroredNote ||
+          (landedOverdue ? "Due date is past — it also appears under Overdue." : undefined),
       });
       setEmailDialogOpen(false);
       setActiveEmailInvoice(null);
@@ -4000,143 +4072,201 @@ Prep Services FBA Team`;
                     </div>
                     <div className="col-span-1" />
                   </div>
-                  {formData.items.map((item) => {
-                    const compare = Number(item.compareUnitPrice || 0);
-                    const unit = Number(item.unitPrice || 0);
-                    const qty = Number(item.quantity || 0);
-                    const lineSaved =
-                      compare > unit && compare > 0
-                        ? Number(((compare - unit) * qty).toFixed(2))
-                        : 0;
-                    return (
-                    <div key={item.id} className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-2 items-center border-b border-amber-100/50 pb-3 md:pb-2 invoice-actions">
-                      <div className="md:col-span-4 space-y-1 min-w-0 pr-2 md:pr-3">
-                        <label className="text-xs font-medium text-amber-800 md:hidden">Item Description</label>
-                        {isPrintMode ? (
-                          <p className="text-sm whitespace-pre-wrap break-words">{item.description || "—"}</p>
-                        ) : (
-                          <>
-                            <div className="flex gap-1.5 items-center">
-                              <Select
-                                onValueChange={(catalogId) => {
-                                  if (!catalogId) return;
-                                  applyCatalogLineToItem(item.id, catalogId);
-                                }}
-                                disabled={lineCatalogLoading || lineCatalog.length === 0}
-                              >
-                                <SelectTrigger className="h-8 text-xs border-amber-200/70 flex-1 min-w-0">
-                                  <SelectValue
-                                    placeholder={
-                                      lineCatalogLoading
-                                        ? "Loading catalog…"
-                                        : lineCatalog.length
-                                          ? "Fill from my catalog"
-                                          : "No saved lines yet"
+                  <DndContext
+                    sensors={invoiceLineSensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={(event: DragEndEvent) => {
+                      const { active, over } = event;
+                      if (!over || active.id === over.id) return;
+                      reorderItems(String(active.id), String(over.id));
+                    }}
+                  >
+                    <SortableContext
+                      items={formData.items.map((item) => item.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {formData.items.map((item) => {
+                        const compare = Number(item.compareUnitPrice || 0);
+                        const unit = Number(item.unitPrice || 0);
+                        const qty = Number(item.quantity || 0);
+                        const lineSaved =
+                          compare > unit && compare > 0
+                            ? Number(((compare - unit) * qty).toFixed(2))
+                            : 0;
+                        return (
+                          <SortableInvoiceLineRow
+                            key={item.id}
+                            id={item.id}
+                            disabled={isPrintMode}
+                            className="border-b border-amber-100/50 pb-3 md:pb-2 invoice-actions"
+                          >
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-2 items-center">
+                              <div className="md:col-span-4 space-y-1 min-w-0 pr-2 md:pr-3">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Item Description
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm whitespace-pre-wrap break-words">
+                                    {item.description || "—"}
+                                  </p>
+                                ) : (
+                                  <>
+                                    <div className="flex gap-1.5 items-center">
+                                      <Select
+                                        onValueChange={(catalogId) => {
+                                          if (!catalogId) return;
+                                          applyCatalogLineToItem(item.id, catalogId);
+                                        }}
+                                        disabled={lineCatalogLoading || lineCatalog.length === 0}
+                                      >
+                                        <SelectTrigger className="h-8 text-xs border-amber-200/70 flex-1 min-w-0">
+                                          <SelectValue
+                                            placeholder={
+                                              lineCatalogLoading
+                                                ? "Loading catalog…"
+                                                : lineCatalog.length
+                                                  ? "Fill from my catalog"
+                                                  : "No saved lines yet"
+                                            }
+                                          />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {lineCatalog.map((row) => (
+                                            <SelectItem key={row.id} value={row.id}>
+                                              {catalogLineLabel(row)}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-8 shrink-0 border-amber-200/70 px-2"
+                                        title="Save this line to my catalog"
+                                        disabled={
+                                          lineCatalogBusy || !(item.description || "").trim()
+                                        }
+                                        onClick={() => void saveItemToCatalog(item)}
+                                      >
+                                        <BookmarkPlus className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                    <Textarea
+                                      value={item.description}
+                                      onChange={(event) =>
+                                        updateItem(item.id, "description", event.target.value)
+                                      }
+                                      placeholder="Item description"
+                                      rows={2}
+                                      className="min-h-9 border-amber-200/70 w-full resize-y"
+                                    />
+                                  </>
+                                )}
+                              </div>
+                              <div className="md:col-span-1 space-y-1">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Qty
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm text-center">
+                                    {Number(item.quantity ?? 0)}
+                                  </p>
+                                ) : (
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={item.quantity != null ? String(item.quantity) : ""}
+                                    onChange={(event) =>
+                                      updateItem(item.id, "quantity", event.target.value)
                                     }
+                                    className="h-9 text-center border-amber-200/70 w-full"
                                   />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {lineCatalog.map((row) => (
-                                    <SelectItem key={row.id} value={row.id}>
-                                      {catalogLineLabel(row)}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-8 shrink-0 border-amber-200/70 px-2"
-                                title="Save this line to my catalog"
-                                disabled={lineCatalogBusy || !(item.description || "").trim()}
-                                onClick={() => void saveItemToCatalog(item)}
-                              >
-                                <BookmarkPlus className="h-4 w-4" />
-                              </Button>
+                                )}
+                              </div>
+                              <div className="md:col-span-2 space-y-1">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Est. Market Price ($)
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm text-right text-muted-foreground">
+                                    ${Number(item.compareUnitPrice ?? 0).toFixed(2)}
+                                  </p>
+                                ) : (
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    value={
+                                      item.compareUnitPrice != null
+                                        ? String(item.compareUnitPrice)
+                                        : ""
+                                    }
+                                    onChange={(event) =>
+                                      updateItem(
+                                        item.id,
+                                        "compareUnitPrice",
+                                        event.target.value
+                                      )
+                                    }
+                                    className="h-9 text-right border-amber-200/70 w-full"
+                                    placeholder="Est. market $"
+                                    title="Estimated market unit price for the value report"
+                                  />
+                                )}
+                              </div>
+                              <div className="md:col-span-2 space-y-1">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Your price ($)
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm text-right">
+                                    ${Number(item.unitPrice ?? 0).toFixed(2)}
+                                  </p>
+                                ) : (
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    value={item.unitPrice != null ? String(item.unitPrice) : ""}
+                                    onChange={(event) =>
+                                      updateItem(item.id, "unitPrice", event.target.value)
+                                    }
+                                    className="h-9 text-right border-amber-200/70 w-full"
+                                    placeholder="0.00"
+                                  />
+                                )}
+                                {lineSaved > 0 ? (
+                                  <p className="text-[11px] text-emerald-700 text-right font-medium">
+                                    Saves ${lineSaved.toFixed(2)}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="md:col-span-2 flex items-center justify-between md:justify-end gap-2">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Amount
+                                </label>
+                                <p className="text-sm text-right font-semibold">
+                                  ${Number(item.amount ?? 0).toFixed(2)}
+                                </p>
+                              </div>
+                              <div className="md:col-span-1 flex justify-end invoice-remove-column">
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  onClick={() => removeItem(item.id)}
+                                  disabled={formData.items.length === 1}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
-                            <Textarea
-                              value={item.description}
-                              onChange={(event) => updateItem(item.id, "description", event.target.value)}
-                              placeholder="Item description"
-                              rows={2}
-                              className="min-h-9 border-amber-200/70 w-full resize-y"
-                            />
-                          </>
-                        )}
-                      </div>
-                      <div className="md:col-span-1 space-y-1">
-                        <label className="text-xs font-medium text-amber-800 md:hidden">Qty</label>
-                        {isPrintMode ? (
-                          <p className="text-sm text-center">{Number(item.quantity ?? 0)}</p>
-                        ) : (
-                          <Input
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={item.quantity != null ? String(item.quantity) : ""}
-                            onChange={(event) => updateItem(item.id, "quantity", event.target.value)}
-                            className="h-9 text-center border-amber-200/70 w-full"
-                          />
-                        )}
-                      </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <label className="text-xs font-medium text-amber-800 md:hidden">Est. Market Price ($)</label>
-                        {isPrintMode ? (
-                          <p className="text-sm text-right text-muted-foreground">
-                            ${Number(item.compareUnitPrice ?? 0).toFixed(2)}
-                          </p>
-                        ) : (
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={item.compareUnitPrice != null ? String(item.compareUnitPrice) : ""}
-                            onChange={(event) => updateItem(item.id, "compareUnitPrice", event.target.value)}
-                            className="h-9 text-right border-amber-200/70 w-full"
-                            placeholder="Est. market $"
-                            title="Estimated market unit price for the value report"
-                          />
-                        )}
-                      </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <label className="text-xs font-medium text-amber-800 md:hidden">Your price ($)</label>
-                        {isPrintMode ? (
-                          <p className="text-sm text-right">${Number(item.unitPrice ?? 0).toFixed(2)}</p>
-                        ) : (
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={item.unitPrice != null ? String(item.unitPrice) : ""}
-                            onChange={(event) => updateItem(item.id, "unitPrice", event.target.value)}
-                            className="h-9 text-right border-amber-200/70 w-full"
-                            placeholder="0.00"
-                          />
-                        )}
-                        {lineSaved > 0 ? (
-                          <p className="text-[11px] text-emerald-700 text-right font-medium">
-                            Saves ${lineSaved.toFixed(2)}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="md:col-span-2 flex items-center justify-between md:justify-end gap-2">
-                        <label className="text-xs font-medium text-amber-800 md:hidden">Amount</label>
-                        <p className="text-sm text-right font-semibold">${Number(item.amount ?? 0).toFixed(2)}</p>
-                      </div>
-                      <div className="md:col-span-1 flex justify-end invoice-remove-column">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => removeItem(item.id)}
-                          disabled={formData.items.length === 1}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                    );
-                  })}
+                          </SortableInvoiceLineRow>
+                        );
+                      })}
+                    </SortableContext>
+                  </DndContext>
                   <div className="invoice-actions pt-2">
                     <Button variant="outline" size="sm" onClick={addItem}>
                       <Plus className="h-4 w-4 mr-1" />
@@ -4173,170 +4303,209 @@ Prep Services FBA Team`;
                       <div className="col-span-1" />
                     </div>
                   ) : null}
-                  {(formData.shippingLabelItems || []).map((item) => {
-                    const compare = Number(item.compareUnitPrice || 0);
-                    const unit = Number(item.unitPrice || 0);
-                    const qty = Number(item.quantity || 0);
-                    const lineSaved =
-                      compare > unit && compare > 0
-                        ? Number(((compare - unit) * qty).toFixed(2))
-                        : 0;
-                    return (
-                      <div
-                        key={item.id}
-                        className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-2 items-center border-b border-amber-100/50 pb-3 md:pb-2 invoice-actions"
-                      >
-                        <div className="md:col-span-4 space-y-1 min-w-0 pr-2 md:pr-3">
-                          <label className="text-xs font-medium text-amber-800 md:hidden">
-                            Label Description
-                          </label>
-                          {isPrintMode ? (
-                            <p className="text-sm whitespace-pre-wrap break-words">
-                              {item.description || "—"}
-                            </p>
-                          ) : (
-                            <>
-                              <div className="flex gap-1.5 items-center">
-                                <Select
-                                  onValueChange={(catalogId) => {
-                                    if (!catalogId) return;
-                                    applyCatalogLineToShippingLabel(item.id, catalogId);
-                                  }}
-                                  disabled={lineCatalogLoading || lineCatalog.length === 0}
-                                >
-                                  <SelectTrigger className="h-8 text-xs border-amber-200/70 flex-1 min-w-0">
-                                    <SelectValue
-                                      placeholder={
-                                        lineCatalog.length
-                                          ? "Fill from my catalog"
-                                          : "No saved lines yet"
+                  <DndContext
+                    sensors={invoiceLineSensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={(event: DragEndEvent) => {
+                      const { active, over } = event;
+                      if (!over || active.id === over.id) return;
+                      reorderShippingLabelItems(String(active.id), String(over.id));
+                    }}
+                  >
+                    <SortableContext
+                      items={(formData.shippingLabelItems || []).map((item) => item.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {(formData.shippingLabelItems || []).map((item) => {
+                        const compare = Number(item.compareUnitPrice || 0);
+                        const unit = Number(item.unitPrice || 0);
+                        const qty = Number(item.quantity || 0);
+                        const lineSaved =
+                          compare > unit && compare > 0
+                            ? Number(((compare - unit) * qty).toFixed(2))
+                            : 0;
+                        return (
+                          <SortableInvoiceLineRow
+                            key={item.id}
+                            id={item.id}
+                            disabled={isPrintMode}
+                            className="border-b border-amber-100/50 pb-3 md:pb-2 invoice-actions"
+                          >
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-2 items-center">
+                              <div className="md:col-span-4 space-y-1 min-w-0 pr-2 md:pr-3">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Label Description
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm whitespace-pre-wrap break-words">
+                                    {item.description || "—"}
+                                  </p>
+                                ) : (
+                                  <>
+                                    <div className="flex gap-1.5 items-center">
+                                      <Select
+                                        onValueChange={(catalogId) => {
+                                          if (!catalogId) return;
+                                          applyCatalogLineToShippingLabel(item.id, catalogId);
+                                        }}
+                                        disabled={lineCatalogLoading || lineCatalog.length === 0}
+                                      >
+                                        <SelectTrigger className="h-8 text-xs border-amber-200/70 flex-1 min-w-0">
+                                          <SelectValue
+                                            placeholder={
+                                              lineCatalog.length
+                                                ? "Fill from my catalog"
+                                                : "No saved lines yet"
+                                            }
+                                          />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {lineCatalog.map((row) => (
+                                            <SelectItem key={row.id} value={row.id}>
+                                              {catalogLineLabel(row)}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-8 shrink-0 border-amber-200/70 px-2"
+                                        title="Save this line to my catalog"
+                                        disabled={
+                                          lineCatalogBusy || !(item.description || "").trim()
+                                        }
+                                        onClick={() => void saveItemToCatalog(item)}
+                                      >
+                                        <BookmarkPlus className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                    <Textarea
+                                      value={item.description}
+                                      onChange={(event) =>
+                                        updateShippingLabelItem(
+                                          item.id,
+                                          "description",
+                                          event.target.value
+                                        )
                                       }
+                                      placeholder="Shipping label description"
+                                      rows={2}
+                                      className="min-h-9 border-amber-200/70 w-full resize-y"
                                     />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {lineCatalog.map((row) => (
-                                      <SelectItem key={row.id} value={row.id}>
-                                        {catalogLineLabel(row)}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                  </>
+                                )}
+                              </div>
+                              <div className="md:col-span-1 space-y-1">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Qty
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm text-center">
+                                    {Number(item.quantity ?? 0)}
+                                  </p>
+                                ) : (
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={item.quantity != null ? String(item.quantity) : ""}
+                                    onChange={(event) =>
+                                      updateShippingLabelItem(
+                                        item.id,
+                                        "quantity",
+                                        event.target.value
+                                      )
+                                    }
+                                    className="h-9 text-center border-amber-200/70 w-full"
+                                  />
+                                )}
+                              </div>
+                              <div className="md:col-span-2 space-y-1">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Est. Market Price ($)
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm text-right text-muted-foreground">
+                                    ${Number(item.compareUnitPrice ?? 0).toFixed(2)}
+                                  </p>
+                                ) : (
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    value={
+                                      item.compareUnitPrice != null
+                                        ? String(item.compareUnitPrice)
+                                        : ""
+                                    }
+                                    onChange={(event) =>
+                                      updateShippingLabelItem(
+                                        item.id,
+                                        "compareUnitPrice",
+                                        event.target.value
+                                      )
+                                    }
+                                    className="h-9 text-right border-amber-200/70 w-full"
+                                    placeholder="Est. market $"
+                                  />
+                                )}
+                              </div>
+                              <div className="md:col-span-2 space-y-1">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Your price ($)
+                                </label>
+                                {isPrintMode ? (
+                                  <p className="text-sm text-right">
+                                    ${Number(item.unitPrice ?? 0).toFixed(2)}
+                                  </p>
+                                ) : (
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    step="0.01"
+                                    value={item.unitPrice != null ? String(item.unitPrice) : ""}
+                                    onChange={(event) =>
+                                      updateShippingLabelItem(
+                                        item.id,
+                                        "unitPrice",
+                                        event.target.value
+                                      )
+                                    }
+                                    className="h-9 text-right border-amber-200/70 w-full"
+                                    placeholder="0.00"
+                                  />
+                                )}
+                                {lineSaved > 0 ? (
+                                  <p className="text-[11px] text-emerald-700 text-right font-medium">
+                                    Saves ${lineSaved.toFixed(2)}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="md:col-span-2 flex items-center justify-between md:justify-end gap-2">
+                                <label className="text-xs font-medium text-amber-800 md:hidden">
+                                  Amount
+                                </label>
+                                <p className="text-sm text-right font-semibold">
+                                  ${Number(item.amount ?? 0).toFixed(2)}
+                                </p>
+                              </div>
+                              <div className="md:col-span-1 flex justify-end invoice-remove-column">
                                 <Button
-                                  type="button"
-                                  variant="outline"
+                                  variant="destructive"
                                   size="sm"
-                                  className="h-8 shrink-0 border-amber-200/70 px-2"
-                                  title="Save this line to my catalog"
-                                  disabled={lineCatalogBusy || !(item.description || "").trim()}
-                                  onClick={() => void saveItemToCatalog(item)}
+                                  onClick={() => removeShippingLabelItem(item.id)}
                                 >
-                                  <BookmarkPlus className="h-4 w-4" />
+                                  <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
-                              <Textarea
-                                value={item.description}
-                                onChange={(event) =>
-                                  updateShippingLabelItem(item.id, "description", event.target.value)
-                                }
-                                placeholder="Shipping label description"
-                                rows={2}
-                                className="min-h-9 border-amber-200/70 w-full resize-y"
-                              />
-                            </>
-                          )}
-                        </div>
-                        <div className="md:col-span-1 space-y-1">
-                          <label className="text-xs font-medium text-amber-800 md:hidden">Qty</label>
-                          {isPrintMode ? (
-                            <p className="text-sm text-center">{Number(item.quantity ?? 0)}</p>
-                          ) : (
-                            <Input
-                              type="number"
-                              min={0}
-                              step={1}
-                              value={item.quantity != null ? String(item.quantity) : ""}
-                              onChange={(event) =>
-                                updateShippingLabelItem(item.id, "quantity", event.target.value)
-                              }
-                              className="h-9 text-center border-amber-200/70 w-full"
-                            />
-                          )}
-                        </div>
-                        <div className="md:col-span-2 space-y-1">
-                          <label className="text-xs font-medium text-amber-800 md:hidden">
-                            Est. Market Price ($)
-                          </label>
-                          {isPrintMode ? (
-                            <p className="text-sm text-right text-muted-foreground">
-                              ${Number(item.compareUnitPrice ?? 0).toFixed(2)}
-                            </p>
-                          ) : (
-                            <Input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={
-                                item.compareUnitPrice != null ? String(item.compareUnitPrice) : ""
-                              }
-                              onChange={(event) =>
-                                updateShippingLabelItem(
-                                  item.id,
-                                  "compareUnitPrice",
-                                  event.target.value
-                                )
-                              }
-                              className="h-9 text-right border-amber-200/70 w-full"
-                              placeholder="Est. market $"
-                            />
-                          )}
-                        </div>
-                        <div className="md:col-span-2 space-y-1">
-                          <label className="text-xs font-medium text-amber-800 md:hidden">
-                            Your price ($)
-                          </label>
-                          {isPrintMode ? (
-                            <p className="text-sm text-right">
-                              ${Number(item.unitPrice ?? 0).toFixed(2)}
-                            </p>
-                          ) : (
-                            <Input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={item.unitPrice != null ? String(item.unitPrice) : ""}
-                              onChange={(event) =>
-                                updateShippingLabelItem(item.id, "unitPrice", event.target.value)
-                              }
-                              className="h-9 text-right border-amber-200/70 w-full"
-                              placeholder="0.00"
-                            />
-                          )}
-                          {lineSaved > 0 ? (
-                            <p className="text-[11px] text-emerald-700 text-right font-medium">
-                              Saves ${lineSaved.toFixed(2)}
-                            </p>
-                          ) : null}
-                        </div>
-                        <div className="md:col-span-2 flex items-center justify-between md:justify-end gap-2">
-                          <label className="text-xs font-medium text-amber-800 md:hidden">
-                            Amount
-                          </label>
-                          <p className="text-sm text-right font-semibold">
-                            ${Number(item.amount ?? 0).toFixed(2)}
-                          </p>
-                        </div>
-                        <div className="md:col-span-1 flex justify-end invoice-remove-column">
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => removeShippingLabelItem(item.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                            </div>
+                          </SortableInvoiceLineRow>
+                        );
+                      })}
+                    </SortableContext>
+                  </DndContext>
                   <div className="invoice-actions pt-2">
                     <Button variant="outline" size="sm" onClick={addShippingLabelItem}>
                       <Plus className="h-4 w-4 mr-1" />
@@ -5287,6 +5456,26 @@ Prep Services FBA Team`;
                 }
               />
             </div>
+            {activeEmailInvoice?.prepcorexClientUserId &&
+            !activeEmailInvoice.prepcorexMirroredInvoiceId ? (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50/70 p-3">
+                <Checkbox
+                  id="mirror-prepcorex"
+                  checked={mirrorToPrepcorex}
+                  onCheckedChange={(checked) => setMirrorToPrepcorex(checked === true)}
+                  className="mt-0.5"
+                />
+                <div className="space-y-0.5">
+                  <Label htmlFor="mirror-prepcorex" className="cursor-pointer text-sm font-medium">
+                    Also show in PrepCorex invoices
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Creates a matching pending invoice on the client’s PrepCorex portal (PrepCorex
+                    template), in addition to this CRM invoice.
+                  </p>
+                </div>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEmailDialogOpen(false)}>

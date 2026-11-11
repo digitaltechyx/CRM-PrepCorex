@@ -39,6 +39,7 @@ import {
   CRM_INVOICE_FILL_STORAGE_KEY,
   type CrmInvoiceFillPayload,
 } from "@/lib/prepcorex-invoice-sync";
+import { isCrmStorageDraftInvoice } from "@/lib/crm-storage-draft";
 import {
   addInvoiceCatalogLine,
   catalogLineLabel,
@@ -218,10 +219,12 @@ interface ExternalInvoice {
   mercuryPaymentUrl?: string;
   mercuryInvoiceStatus?: string;
   mercurySyncedAt?: any;
-  /** PrepCorex client uid when this draft was auto-built from outbound. */
+  /** PrepCorex client uid when this draft was auto-built from outbound / storage. */
   prepcorexClientUserId?: string | null;
   billingSource?: string | null;
   consolidationKey?: string | null;
+  /** e.g. "storage" for monthly pallet storage CRM drafts. */
+  type?: string | null;
   prepcorexMirroredInvoiceId?: string | null;
   showInPrepcorex?: boolean | null;
   createdAt?: any;
@@ -830,7 +833,12 @@ export function InvoiceManagementPortal() {
     return list;
   }, [invoices, searchQuery, dateFrom, dateTo]);
 
-  const draftInvoices = filteredInvoices.filter((invoice) => invoice.status === "draft");
+  const draftInvoices = filteredInvoices.filter(
+    (invoice) => invoice.status === "draft" && !isCrmStorageDraftInvoice(invoice)
+  );
+  const storageDraftInvoices = filteredInvoices.filter(
+    (invoice) => invoice.status === "draft" && isCrmStorageDraftInvoice(invoice)
+  );
   // Include overdue sent invoices here too — Overdue tab remains the action queue.
   const sentInvoices = filteredInvoices.filter((invoice) => invoice.status === "sent");
   const partiallyPaidInvoices = filteredInvoices.filter(
@@ -2221,9 +2229,18 @@ Prep Services FBA Team`;
       await saveInvoiceRecord(status);
 
       toast({ title: status === "draft" ? "Invoice saved as draft." : "Invoice saved." });
+      const wasStorageDraft =
+        Boolean(editingInvoiceId) &&
+        isCrmStorageDraftInvoice(
+          invoices.find((inv) => inv.id === editingInvoiceId) || {
+            billingSource: formData.billingSource,
+            type: (formData as { type?: string }).type,
+            invoiceNumber: formData.invoiceNumber,
+          }
+        );
       resetForm();
       if (status === "draft") {
-        setActiveTab("draft");
+        setActiveTab(wasStorageDraft ? "storage_draft" : "draft");
       }
     } catch (error) {
       console.error("Failed to save invoice:", error);
@@ -3639,6 +3656,14 @@ Prep Services FBA Team`;
               Draft
             </TabsTrigger>
             <TabsTrigger
+              value="storage_draft"
+              className="flex-shrink-0 text-xs sm:text-sm px-2 py-1.5 sm:px-3 sm:py-1.5 min-h-[44px] sm:min-h-0 data-[state=active]:bg-gradient-to-r data-[state=active]:from-teal-500 data-[state=active]:to-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md transition-all [&_svg]:h-3.5 [&_svg]:w-3.5 sm:[&_svg]:h-4 sm:[&_svg]:w-4 [&_svg]:mr-1.5 sm:[&_svg]:mr-2"
+            >
+              <FileText className="shrink-0" />
+              <span className="hidden sm:inline">Storage draft</span>
+              <span className="sm:hidden">Storage</span>
+            </TabsTrigger>
+            <TabsTrigger
               value="sent"
               className="flex-shrink-0 text-xs sm:text-sm px-2 py-1.5 sm:px-3 sm:py-1.5 min-h-[44px] sm:min-h-0 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-pink-600 data-[state=active]:text-white data-[state=active]:shadow-md transition-all [&_svg]:h-3.5 [&_svg]:w-3.5 sm:[&_svg]:h-4 sm:[&_svg]:w-4 [&_svg]:mr-1.5 sm:[&_svg]:mr-2"
             >
@@ -4800,7 +4825,10 @@ Prep Services FBA Team`;
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <CardTitle>Draft Invoices</CardTitle>
-                  <CardDescription>Saved invoices that are not sent.</CardDescription>
+                  <CardDescription>
+                    Saved invoices that are not sent (outbound / manual). Storage drafts are under
+                    Storage draft.
+                  </CardDescription>
                 </div>
                 <Button
                   variant="outline"
@@ -4894,6 +4922,154 @@ Prep Services FBA Team`;
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">No draft invoices yet.</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="storage_draft" className="space-y-4">
+          {searchAndDateFilterBar}
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <CardTitle>Storage draft</CardTitle>
+                  <CardDescription>
+                    Monthly pallet storage invoices from PrepCorex. Review or edit, then Send / Mark as
+                    sent. Sync to PrepCorex is optional — without sync the invoice stays in CRM only.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    downloadInvoicesCsv(storageDraftInvoices, "storage-draft-invoices")
+                  }
+                  disabled={!storageDraftInvoices.length}
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  Download CSV
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {storageDraftInvoices.length ? (
+                <>
+                  <div className="space-y-3">
+                    {getPaginatedData(storageDraftInvoices, currentPage).paginatedData.map(
+                      (invoice) => (
+                        <Card
+                          key={invoice.id}
+                          className="border-2 border-teal-200 dark:border-teal-800"
+                        >
+                          <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+                            <div>
+                              <div className="font-semibold">{invoice.clientName || "—"}</div>
+                              <div className="text-sm text-muted-foreground">
+                                {invoice.invoiceNumber}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => viewInvoicePdf(invoice)}
+                              >
+                                View
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleEditInvoice(invoice)}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleCopyInvoice(invoice)}
+                              >
+                                <Copy className="h-4 w-4 mr-1" />
+                                Copy
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => openEmailDialog(invoice)}
+                              >
+                                Send
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-violet-300 text-violet-700 hover:bg-violet-50 dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-950/30"
+                                title="Mark as sent without email"
+                                onClick={() => openMarkAsSentDialog(invoice)}
+                              >
+                                <CheckCircle className="h-4 w-4 mr-1" />
+                                Mark as sent
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-green-300 text-green-700 hover:bg-green-50 dark:border-green-800 dark:text-green-300 dark:hover:bg-green-950/30"
+                                onClick={() => openMarkPaidDialog(invoice)}
+                              >
+                                Paid
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => handleDeleteInvoice(invoice)}
+                              >
+                                Delete
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    )}
+                  </div>
+                  {storageDraftInvoices.length > itemsPerPage && (
+                    <div className="flex items-center justify-between pt-3 border-t">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                      >
+                        Previous
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        {currentPage} /{" "}
+                        {getPaginatedData(storageDraftInvoices, currentPage).totalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setCurrentPage((p) =>
+                            Math.min(
+                              getPaginatedData(storageDraftInvoices, currentPage).totalPages,
+                              p + 1
+                            )
+                          )
+                        }
+                        disabled={
+                          currentPage >=
+                          getPaginatedData(storageDraftInvoices, currentPage).totalPages
+                        }
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No storage drafts yet. Monthly generation creates them for clients with due pallet
+                  cycles.
+                </p>
               )}
             </CardContent>
           </Card>

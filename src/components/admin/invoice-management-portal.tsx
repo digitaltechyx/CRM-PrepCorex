@@ -299,6 +299,13 @@ const createInvoiceNumber = () => {
   return `INV-${year}${month}-${randomNum}`;
 };
 
+/** PrepCorex consolidated drafts start as DRAFT-PCX-… — assign a real INV-… before send/mirror. */
+const isDraftPlaceholderInvoiceNumber = (value?: string | null): boolean => {
+  const n = String(value || "").trim();
+  if (!n) return true;
+  return /^draft(\b|-|_)/i.test(n);
+};
+
 const formatDateInputLocal = (date: Date): string => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -634,6 +641,12 @@ export function InvoiceManagementPortal() {
   });
   const [activeEmailInvoice, setActiveEmailInvoice] = useState<ExternalInvoice | null>(null);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
+
+  /** Mark draft as sent without email — optional PrepCorex mirror. */
+  const [markSentDialogOpen, setMarkSentDialogOpen] = useState(false);
+  const [markSentInvoice, setMarkSentInvoice] = useState<ExternalInvoice | null>(null);
+  const [markSentMirrorPrepcorex, setMarkSentMirrorPrepcorex] = useState(false);
+  const [isMarkingSent, setIsMarkingSent] = useState(false);
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
@@ -2466,6 +2479,86 @@ Prep Services FBA Team`;
     setEmailDialogOpen(true);
   };
 
+  /** Replace DRAFT-PCX-… with a real INV-… before send / mark-as-sent / PrepCorex sync. */
+  const ensureFinalInvoiceNumber = async (
+    invoice: ExternalInvoice
+  ): Promise<ExternalInvoice> => {
+    if (!isDraftPlaceholderInvoiceNumber(invoice.invoiceNumber)) return invoice;
+    const invoiceNumber = createInvoiceNumber();
+    await updateDoc(doc(db, "external_invoices", invoice.id), {
+      invoiceNumber,
+      updatedAt: serverTimestamp(),
+    });
+    return { ...invoice, invoiceNumber };
+  };
+
+  const openMarkAsSentDialog = (invoice: ExternalInvoice) => {
+    setMarkSentInvoice(invoice);
+    setMarkSentMirrorPrepcorex(
+      Boolean(invoice.prepcorexClientUserId) && !invoice.prepcorexMirroredInvoiceId
+    );
+    setMarkSentDialogOpen(true);
+  };
+
+  const confirmMarkAsSent = async () => {
+    if (!markSentInvoice) return;
+    setIsMarkingSent(true);
+    try {
+      let invoice = await ensureFinalInvoiceNumber(markSentInvoice);
+      await updateDoc(doc(db, "external_invoices", invoice.id), {
+        status: "sent",
+        sentAt: invoice.sentAt || serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      let mirroredNote: string | undefined;
+      if (
+        markSentMirrorPrepcorex &&
+        invoice.prepcorexClientUserId &&
+        !invoice.prepcorexMirroredInvoiceId
+      ) {
+        try {
+          const { mirrorCrmInvoiceToPrepcorex } = await import(
+            "@/lib/mirror-crm-invoice-to-prepcorex"
+          );
+          const mirrorResult = await mirrorCrmInvoiceToPrepcorex({
+            clientUserId: invoice.prepcorexClientUserId,
+            invoice,
+          });
+          if (
+            mirrorResult.invoiceNumber &&
+            mirrorResult.invoiceNumber !== invoice.invoiceNumber
+          ) {
+            invoice = { ...invoice, invoiceNumber: mirrorResult.invoiceNumber };
+          }
+          mirroredNote = "Also shown in PrepCorex client invoices.";
+        } catch (mirrorErr) {
+          console.error("PrepCorex mirror failed", mirrorErr);
+          mirroredNote =
+            "Marked as sent, but PrepCorex sync failed — you can retry from support.";
+        }
+      }
+
+      toast({
+        title: `Marked as sent · ${invoice.invoiceNumber}`,
+        description: mirroredNote || "No email was sent.",
+      });
+      setMarkSentDialogOpen(false);
+      setMarkSentInvoice(null);
+      setCurrentPage(1);
+      setActiveTab("sent");
+    } catch (error) {
+      console.error("Failed to mark invoice as sent:", error);
+      toast({
+        variant: "destructive",
+        title: "Could not mark as sent",
+        description: error instanceof Error ? error.message : "Try again.",
+      });
+    } finally {
+      setIsMarkingSent(false);
+    }
+  };
+
   const fetchMercuryEgressIp = async () => {
     if (!user) {
       toast({ variant: "destructive", title: "You must be logged in." });
@@ -2507,6 +2600,22 @@ Prep Services FBA Team`;
     if (!activeEmailInvoice || !user) return;
     setIsSendingEmail(true);
     try {
+      // Upgrade DRAFT-PCX-… to a real INV-… before PDF / email / PrepCorex mirror.
+      let invoice = await ensureFinalInvoiceNumber(activeEmailInvoice);
+      setActiveEmailInvoice(invoice);
+      if (
+        isDraftPlaceholderInvoiceNumber(activeEmailInvoice.invoiceNumber) &&
+        emailForm.subject.includes(String(activeEmailInvoice.invoiceNumber || ""))
+      ) {
+        setEmailForm((prev) => ({
+          ...prev,
+          subject: prev.subject.replace(
+            String(activeEmailInvoice.invoiceNumber),
+            invoice.invoiceNumber
+          ),
+        }));
+      }
+
       const idToken = await user.getIdToken();
       const headers: HeadersInit = {
         Authorization: `Bearer ${idToken}`,
@@ -2518,7 +2627,7 @@ Prep Services FBA Team`;
 
       let mercuryPaymentUrl = "";
       if (MERCURY_INTEGRATION_ENABLED) {
-        mercuryPaymentUrl = activeEmailInvoice.mercuryPaymentUrl || "";
+        mercuryPaymentUrl = invoice.mercuryPaymentUrl || "";
         try {
           const mercuryRes = await fetch("/api/mercury/invoices", {
             method: "POST",
@@ -2526,7 +2635,7 @@ Prep Services FBA Team`;
               ...headers,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ invoiceId: activeEmailInvoice.id }),
+            body: JSON.stringify({ invoiceId: invoice.id }),
           });
           if (mercuryRes.ok) {
             const mercuryData = (await mercuryRes.json()) as { mercuryPaymentUrl?: string };
@@ -2560,16 +2669,23 @@ Prep Services FBA Team`;
       const emailMessage =
         (emailForm.message || "Please find your invoice attached.").trim() + paymentBlock;
 
-      const invoiceBlob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(activeEmailInvoice));
-      const invoiceFile = new File([invoiceBlob], `Invoice-${activeEmailInvoice.invoiceNumber}.pdf`, {
+      const emailSubject = emailForm.subject.includes(String(activeEmailInvoice.invoiceNumber || ""))
+        ? emailForm.subject.replace(
+            String(activeEmailInvoice.invoiceNumber),
+            invoice.invoiceNumber
+          )
+        : emailForm.subject.trim();
+
+      const invoiceBlob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(invoice));
+      const invoiceFile = new File([invoiceBlob], `Invoice-${invoice.invoiceNumber}.pdf`, {
         type: "application/pdf",
       });
       const savingsFile = await buildInvoiceSavingsPdfFile({
-        invoiceNumber: activeEmailInvoice.invoiceNumber,
-        invoiceDate: activeEmailInvoice.invoiceDate,
-        clientName: activeEmailInvoice.clientName,
-        items: activeEmailInvoice.items || [],
-        shippingLabelItems: activeEmailInvoice.shippingLabelItems || [],
+        invoiceNumber: invoice.invoiceNumber,
+        invoiceDate: invoice.invoiceDate,
+        clientName: invoice.clientName,
+        items: invoice.items || [],
+        shippingLabelItems: invoice.shippingLabelItems || [],
       });
       const attachmentsToSend = savingsFile
         ? [invoiceFile, savingsFile, ...emailForm.attachments]
@@ -2594,7 +2710,7 @@ Prep Services FBA Team`;
           },
           body: JSON.stringify({
             to: emailForm.to.trim(),
-            subject: emailForm.subject.trim(),
+            subject: emailSubject,
             message: emailMessage,
             attachments: attachmentsPayload,
           }),
@@ -2602,7 +2718,7 @@ Prep Services FBA Team`;
       } else {
         const payload = new FormData();
         payload.append("to", emailForm.to.trim());
-        payload.append("subject", emailForm.subject.trim());
+        payload.append("subject", emailSubject);
         payload.append("message", emailMessage);
         attachmentsToSend.forEach((file) => payload.append("attachments", file));
         const apiUrl = vercelBypass
@@ -2623,9 +2739,10 @@ Prep Services FBA Team`;
         throw new Error(message);
       }
 
-      await updateDoc(doc(db, "external_invoices", activeEmailInvoice.id), {
+      await updateDoc(doc(db, "external_invoices", invoice.id), {
         status: "sent",
-        sentAt: activeEmailInvoice.sentAt || serverTimestamp(),
+        sentAt: invoice.sentAt || serverTimestamp(),
+        invoiceNumber: invoice.invoiceNumber,
         ...(mercuryPaymentUrl
           ? {
               mercuryPaymentUrl,
@@ -2638,17 +2755,23 @@ Prep Services FBA Team`;
       let mirroredNote: string | undefined;
       if (
         mirrorToPrepcorex &&
-        activeEmailInvoice.prepcorexClientUserId &&
-        !activeEmailInvoice.prepcorexMirroredInvoiceId
+        invoice.prepcorexClientUserId &&
+        !invoice.prepcorexMirroredInvoiceId
       ) {
         try {
           const { mirrorCrmInvoiceToPrepcorex } = await import(
             "@/lib/mirror-crm-invoice-to-prepcorex"
           );
-          await mirrorCrmInvoiceToPrepcorex({
-            clientUserId: activeEmailInvoice.prepcorexClientUserId,
-            invoice: activeEmailInvoice,
+          const mirrorResult = await mirrorCrmInvoiceToPrepcorex({
+            clientUserId: invoice.prepcorexClientUserId,
+            invoice,
           });
+          if (
+            mirrorResult.invoiceNumber &&
+            mirrorResult.invoiceNumber !== invoice.invoiceNumber
+          ) {
+            invoice = { ...invoice, invoiceNumber: mirrorResult.invoiceNumber };
+          }
           mirroredNote = "Also shown in PrepCorex client invoices.";
         } catch (mirrorErr) {
           console.error("PrepCorex mirror failed", mirrorErr);
@@ -2659,14 +2782,14 @@ Prep Services FBA Team`;
 
       await logInvoiceEmail({
         to: emailForm.to.trim(),
-        subject: emailForm.subject.trim(),
+        subject: emailSubject,
         type: "invoice_sent",
-        invoiceNumber: activeEmailInvoice.invoiceNumber,
-        clientName: activeEmailInvoice.clientName,
+        invoiceNumber: invoice.invoiceNumber,
+        clientName: invoice.clientName,
       });
 
       const sentInvoice: ExternalInvoice = {
-        ...activeEmailInvoice,
+        ...invoice,
         status: "sent",
         ...(mercuryPaymentUrl
           ? { mercuryPaymentUrl, mercuryInvoiceStatus: "Unpaid" }
@@ -2674,7 +2797,7 @@ Prep Services FBA Team`;
       };
       const landedOverdue = isOverdueInvoice(sentInvoice);
       toast({
-        title: "Invoice sent.",
+        title: `Invoice sent · ${invoice.invoiceNumber}`,
         description:
           mirroredNote ||
           (landedOverdue ? "Due date is past — it also appears under Overdue." : undefined),
@@ -4718,6 +4841,16 @@ Prep Services FBA Team`;
                             <Button
                               variant="outline"
                               size="sm"
+                              className="border-violet-300 text-violet-700 hover:bg-violet-50 dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-950/30"
+                              title="Mark as sent without email"
+                              onClick={() => openMarkAsSentDialog(invoice)}
+                            >
+                              <CheckCircle className="h-4 w-4 mr-1" />
+                              Mark as sent
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
                               className="border-green-300 text-green-700 hover:bg-green-50 dark:border-green-800 dark:text-green-300 dark:hover:bg-green-950/30"
                               onClick={() => openMarkPaidDialog(invoice)}
                             >
@@ -5422,6 +5555,75 @@ Prep Services FBA Team`;
             <Button variant="destructive" onClick={confirmDeleteInvoice} disabled={saving}>
               {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={markSentDialogOpen}
+        onOpenChange={(open) => {
+          setMarkSentDialogOpen(open);
+          if (!open) setMarkSentInvoice(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark as sent</DialogTitle>
+            <DialogDescription>
+              Move this draft to Sent without emailing the client.
+              {markSentInvoice && isDraftPlaceholderInvoiceNumber(markSentInvoice.invoiceNumber)
+                ? " A real invoice number (INV-…) will be assigned."
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {markSentInvoice ? (
+              <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                <div className="font-medium">{markSentInvoice.clientName || "Client"}</div>
+                <div className="text-muted-foreground font-mono text-xs">
+                  {markSentInvoice.invoiceNumber}
+                </div>
+              </div>
+            ) : null}
+            {markSentInvoice?.prepcorexClientUserId &&
+            !markSentInvoice.prepcorexMirroredInvoiceId ? (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50/70 p-3">
+                <Checkbox
+                  id="mark-sent-mirror-prepcorex"
+                  checked={markSentMirrorPrepcorex}
+                  onCheckedChange={(checked) => setMarkSentMirrorPrepcorex(checked === true)}
+                  className="mt-0.5"
+                />
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="mark-sent-mirror-prepcorex"
+                    className="cursor-pointer text-sm font-medium"
+                  >
+                    Also sync to PrepCorex invoices
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Creates a matching pending invoice on the client’s PrepCorex portal.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setMarkSentDialogOpen(false)}
+              disabled={isMarkingSent}
+            >
+              Cancel
+            </Button>
+            <Button onClick={() => void confirmMarkAsSent()} disabled={isMarkingSent}>
+              {isMarkingSent ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <CheckCircle className="h-4 w-4 mr-1" />
+              )}
+              Mark as sent
             </Button>
           </DialogFooter>
         </DialogContent>

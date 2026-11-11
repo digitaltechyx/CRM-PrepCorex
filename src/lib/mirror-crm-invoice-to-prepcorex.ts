@@ -9,6 +9,20 @@ type CrmItem = {
   amount?: number;
 };
 
+/** PrepCorex consolidated drafts start as DRAFT-PCX-… — never mirror that as the final number. */
+export function isDraftPlaceholderInvoiceNumber(value?: string | null): boolean {
+  const n = String(value || "").trim();
+  if (!n) return true;
+  return /^draft(\b|-|_)/i.test(n);
+}
+
+export function createCrmInvoiceNumber(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const randomNum = Math.floor(Math.random() * 1000).toString().padStart(3, "0");
+  return `INV-${year}${month}-${randomNum}`;
+}
+
 /**
  * When CRM sends a PrepCorex-consolidated draft, optionally create a matching
  * pending invoice under users/{clientUid}/invoices (PrepCorex client portal).
@@ -31,9 +45,18 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
     salesTax?: number;
     shippingCost?: number;
   };
-}): Promise<{ prepcorexInvoiceId: string }> {
+}): Promise<{ prepcorexInvoiceId: string; invoiceNumber: string }> {
   const clientUserId = String(input.clientUserId || "").trim();
   if (!clientUserId) throw new Error("Missing PrepCorex client user id");
+
+  let invoiceNumber = String(input.invoice.invoiceNumber || "").trim();
+  if (isDraftPlaceholderInvoiceNumber(invoiceNumber)) {
+    invoiceNumber = createCrmInvoiceNumber();
+    await updateDoc(doc(db, "external_invoices", input.invoice.id), {
+      invoiceNumber,
+      updatedAt: serverTimestamp(),
+    });
+  }
 
   const mapLines = (rows: CrmItem[] | undefined) =>
     (rows || [])
@@ -65,10 +88,10 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
   const grandTotal = Number(input.invoice.total) || subtotal;
 
   const ref = await addDoc(collection(db, `users/${clientUserId}/invoices`), {
-    invoiceNumber: input.invoice.invoiceNumber,
+    invoiceNumber,
     date: input.invoice.invoiceDate || format(new Date(), "yyyy-MM-dd"),
     dueDate: input.invoice.dueDate || null,
-    orderNumber: `CRM-${input.invoice.invoiceNumber}`,
+    orderNumber: `CRM-${invoiceNumber}`,
     soldTo: {
       name: input.invoice.clientName || "Client",
       email: input.invoice.clientEmail || "",
@@ -95,5 +118,5 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
     updatedAt: serverTimestamp(),
   });
 
-  return { prepcorexInvoiceId: ref.id };
+  return { prepcorexInvoiceId: ref.id, invoiceNumber };
 }

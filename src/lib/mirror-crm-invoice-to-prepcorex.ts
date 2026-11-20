@@ -13,6 +13,7 @@ type CrmItem = {
   sku?: string | null;
   packaging?: string | null;
   productName?: string | null;
+  shipTo?: string | null;
 };
 
 /** PrepCorex consolidated drafts start as DRAFT-PCX-… — never mirror that as the final number. */
@@ -92,17 +93,18 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
           parsed.shipDate ||
           format(new Date(), "dd/MM/yyyy");
         const sku = String(row.sku || "").trim() || parsed.sku || "";
+        // Prefer CRM dedicated packaging; never invent "Service" for product lines.
         const packaging =
           String(row.packaging || "").trim() ||
           parsed.packaging ||
-          "Service";
+          "";
         return {
           quantity,
           productName: parsed.productName || raw,
           shipDate,
           sku,
           packaging,
-          shipTo: "",
+          shipTo: String(row.shipTo || "").trim(),
           unitPrice,
           amount,
         };

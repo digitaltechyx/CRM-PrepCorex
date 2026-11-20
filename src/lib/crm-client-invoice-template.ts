@@ -4,10 +4,12 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   orderBy,
   query,
   serverTimestamp,
   setDoc,
+  where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -101,6 +103,22 @@ export async function getClientInvoiceTemplate(input: {
     } catch {
       /* continue */
     }
+    // Fallback: field query if doc id sanitization differs from older saves.
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, CRM_CLIENT_INVOICE_TEMPLATES),
+          where("clientEmail", "==", email),
+          limit(1)
+        )
+      );
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        return mapTemplate(d.id, d.data() as Record<string, unknown>);
+      }
+    } catch {
+      /* continue */
+    }
   }
 
   if (uid) {
@@ -110,6 +128,21 @@ export async function getClientInvoiceTemplate(input: {
       );
       if (byUid.exists()) {
         return mapTemplate(byUid.id, byUid.data() as Record<string, unknown>);
+      }
+    } catch {
+      /* continue */
+    }
+    try {
+      const snap = await getDocs(
+        query(
+          collection(db, CRM_CLIENT_INVOICE_TEMPLATES),
+          where("prepcorexClientUserId", "==", uid),
+          limit(1)
+        )
+      );
+      if (!snap.empty) {
+        const d = snap.docs[0];
+        return mapTemplate(d.id, d.data() as Record<string, unknown>);
       }
     } catch {
       /* continue */

@@ -766,12 +766,45 @@ export function InvoiceManagementPortal() {
       }));
       const subtotal = items.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
       const sourceUserId = String(payload.sourceUserId || "").trim() || null;
+      let resolvedEmail = String(payload.clientEmail || "").trim();
+      let resolvedName = String(payload.clientName || "").trim();
+      let resolvedPhone = String(payload.clientPhone || "").trim();
+      let resolvedAddress = String(payload.clientAddress || "").trim();
+
+      // If PrepCorex sync only had a name, resolve email from the client user profile
+      // so per-client invoice templates (keyed by email) still load.
+      if (sourceUserId && !resolvedEmail) {
+        try {
+          const { getDoc, doc: fsDoc } = await import("firebase/firestore");
+          const userSnap = await getDoc(fsDoc(db, "users", sourceUserId));
+          if (userSnap.exists()) {
+            const userData = userSnap.data() as Record<string, unknown>;
+            resolvedEmail = String(userData.email || "").trim();
+            if (!resolvedName) {
+              resolvedName = String(
+                userData.name || userData.companyName || userData.displayName || ""
+              ).trim();
+            }
+            if (!resolvedPhone) {
+              resolvedPhone = String(userData.phone || "").trim();
+            }
+            if (!resolvedAddress) {
+              resolvedAddress = String(
+                userData.address || userData.companyAddress || ""
+              ).trim();
+            }
+          }
+        } catch (lookupErr) {
+          console.warn("Could not resolve PrepCorex client email for template", lookupErr);
+        }
+      }
+
       setFormData({
         ...base,
-        clientName: payload.clientName || "",
-        clientEmail: payload.clientEmail || "",
-        clientPhone: payload.clientPhone || "",
-        clientAddress: payload.clientAddress || "",
+        clientName: resolvedName || "",
+        clientEmail: resolvedEmail || "",
+        clientPhone: resolvedPhone || "",
+        clientAddress: resolvedAddress || "",
         invoiceDate: payload.invoiceDate || base.invoiceDate,
         dueDate: payload.dueDate || base.dueDate,
         items: items.length > 0 ? items : base.items,
@@ -800,7 +833,7 @@ export function InvoiceManagementPortal() {
       });
       void (async () => {
         const template = await getClientInvoiceTemplate({
-          email: payload.clientEmail,
+          email: resolvedEmail,
           prepcorexClientUserId: sourceUserId,
         });
         if (!template) {
@@ -1223,12 +1256,18 @@ export function InvoiceManagementPortal() {
   };
 
   const updateItem = (id: string, field: keyof ExternalInvoiceItem, value: string) => {
+    const stringFields: Array<keyof ExternalInvoiceItem> = [
+      "description",
+      "shipDate",
+      "sku",
+      "packaging",
+    ];
     setFormData((prev) => {
       const nextItems = prev.items.map((item) =>
         item.id === id
           ? {
               ...item,
-              [field]: field === "description" ? value : toNumber(value),
+              [field]: stringFields.includes(field) ? value : toNumber(value),
             }
           : item
       );
@@ -1501,6 +1540,9 @@ export function InvoiceManagementPortal() {
         quantity: Number(item.quantity || 0),
         unitPrice: Number(item.unitPrice || 0),
         amount: Number(item.amount || 0),
+        shipDate: String(item.shipDate || "").trim() || undefined,
+        sku: String(item.sku || "").trim() || undefined,
+        packaging: String(item.packaging || "").trim() || undefined,
       })),
       ...(invoice.shippingLabelItems || [])
         .filter(
@@ -1514,6 +1556,9 @@ export function InvoiceManagementPortal() {
           quantity: Number(item.quantity || 0),
           unitPrice: Number(item.unitPrice || 0),
           amount: Number(item.amount || 0),
+          shipDate: String(item.shipDate || "").trim() || undefined,
+          sku: String(item.sku || "").trim() || undefined,
+          packaging: String(item.packaging || "").trim() || undefined,
         })),
     ],
     subtotal: invoice.subtotal,
@@ -4529,6 +4574,35 @@ Prep Services FBA Team`;
                                       rows={2}
                                       className="min-h-9 border-amber-200/70 w-full resize-y"
                                     />
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                      <Input
+                                        value={item.shipDate || ""}
+                                        onChange={(event) =>
+                                          updateItem(item.id, "shipDate", event.target.value)
+                                        }
+                                        placeholder="DATE"
+                                        className="h-8 text-xs border-amber-200/70"
+                                        title="Ship date (shown on PrepCorex PDF)"
+                                      />
+                                      <Input
+                                        value={item.sku || ""}
+                                        onChange={(event) =>
+                                          updateItem(item.id, "sku", event.target.value)
+                                        }
+                                        placeholder="SKU"
+                                        className="h-8 text-xs border-amber-200/70"
+                                        title="SKU (shown on PrepCorex PDF)"
+                                      />
+                                      <Input
+                                        value={item.packaging || ""}
+                                        onChange={(event) =>
+                                          updateItem(item.id, "packaging", event.target.value)
+                                        }
+                                        placeholder="PACK"
+                                        className="h-8 text-xs border-amber-200/70"
+                                        title="Pack (shown on PrepCorex PDF)"
+                                      />
+                                    </div>
                                   </>
                                 )}
                               </div>

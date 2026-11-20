@@ -62,6 +62,12 @@ import {
   getContactMatchKey,
   stripUndefinedFields,
 } from "@/lib/crm-address-book";
+import {
+  getClientInvoiceTemplate,
+  saveClientInvoiceTemplate,
+  templateFieldsToInvoicePatch,
+  type CrmClientInvoiceTemplateFields,
+} from "@/lib/crm-client-invoice-template";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -98,6 +104,7 @@ import {
   Plus,
   Receipt,
   RotateCcw,
+  Save,
   Search,
   Send,
   Trash2,
@@ -546,6 +553,142 @@ export function InvoiceManagementPortal() {
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const prepcorexFillAppliedRef = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [clientTemplateBusy, setClientTemplateBusy] = useState(false);
+  const [clientTemplateStatus, setClientTemplateStatus] = useState<
+    "idle" | "loaded" | "missing" | "saved"
+  >("idle");
+
+  const collectTemplateFieldsFromForm = useCallback(
+    (data: typeof formData): CrmClientInvoiceTemplateFields => ({
+      companyName: String(data.companyName || "").trim() || DEFAULT_COMPANY.companyName,
+      companyAddress: String(data.companyAddress || "").trim() || DEFAULT_COMPANY.companyAddress,
+      companyCityStateZip:
+        String(data.companyCityStateZip || "").trim() || DEFAULT_COMPANY.companyCityStateZip,
+      companyCountry: String(data.companyCountry || "").trim() || DEFAULT_COMPANY.companyCountry,
+      companyPhone: String(data.companyPhone || "").trim() || DEFAULT_COMPANY.companyPhone,
+      companyEmail: String(data.companyEmail || "").trim() || DEFAULT_COMPANY.companyEmail,
+      invoiceNote: String(data.invoiceNote || "").trim() || DEFAULT_INVOICE_META.invoiceNote,
+      fobPoint: String(data.fobPoint || "").trim() || DEFAULT_INVOICE_META.fobPoint,
+      shippingTerms: String(data.shippingTerms || "").trim() || DEFAULT_INVOICE_META.shippingTerms,
+      shippedVia: String(data.shippedVia || "").trim() || DEFAULT_INVOICE_META.shippedVia,
+      terms: String(data.terms || "").trim() || INVOICE_TERMS,
+    }),
+    []
+  );
+
+  const applyTemplateFieldsToForm = useCallback((fields: CrmClientInvoiceTemplateFields) => {
+    setFormData((prev) => ({
+      ...prev,
+      companyName: fields.companyName || prev.companyName,
+      companyAddress: fields.companyAddress || prev.companyAddress,
+      companyCityStateZip: fields.companyCityStateZip || prev.companyCityStateZip,
+      companyCountry: fields.companyCountry || prev.companyCountry,
+      companyPhone: fields.companyPhone || prev.companyPhone,
+      companyEmail: fields.companyEmail || prev.companyEmail,
+      invoiceNote: fields.invoiceNote || prev.invoiceNote,
+      fobPoint: fields.fobPoint || prev.fobPoint,
+      shippingTerms: fields.shippingTerms || prev.shippingTerms,
+      shippedVia: fields.shippedVia || prev.shippedVia,
+      terms: fields.terms || prev.terms,
+    }));
+  }, []);
+
+  const loadClientTemplateFor = useCallback(
+    async (input: {
+      email?: string | null;
+      prepcorexClientUserId?: string | null;
+      silent?: boolean;
+    }) => {
+      const email = String(input.email || "").trim();
+      const uid = String(input.prepcorexClientUserId || "").trim();
+      if (!email && !uid) {
+        setClientTemplateStatus("idle");
+        return null;
+      }
+      setClientTemplateBusy(true);
+      try {
+        const template = await getClientInvoiceTemplate({
+          email,
+          prepcorexClientUserId: uid || null,
+        });
+        if (!template) {
+          setClientTemplateStatus("missing");
+          if (!input.silent) {
+            toast({
+              title: "No saved template for this client",
+              description: "Edit terms/company below, then click Save client template.",
+            });
+          }
+          return null;
+        }
+        applyTemplateFieldsToForm(templateFieldsToInvoicePatch(template));
+        setClientTemplateStatus("loaded");
+        if (!input.silent) {
+          toast({
+            title: "Client template loaded",
+            description: `Applied saved terms & company for ${template.clientName || template.clientEmail}.`,
+          });
+        }
+        return template;
+      } catch (err) {
+        console.error("Failed to load client invoice template", err);
+        if (!input.silent) {
+          toast({
+            variant: "destructive",
+            title: "Could not load client template",
+            description: err instanceof Error ? err.message : "Try again.",
+          });
+        }
+        return null;
+      } finally {
+        setClientTemplateBusy(false);
+      }
+    },
+    [applyTemplateFieldsToForm, toast]
+  );
+
+  const saveClientTemplateFromForm = useCallback(async () => {
+    const email = String(formData.clientEmail || "").trim();
+    if (!email) {
+      toast({
+        variant: "destructive",
+        title: "Client email required",
+        description: "Enter the client email before saving their invoice template.",
+      });
+      return;
+    }
+    setClientTemplateBusy(true);
+    try {
+      await saveClientInvoiceTemplate({
+        clientEmail: email,
+        clientName: formData.clientName || "",
+        prepcorexClientUserId: formData.prepcorexClientUserId || null,
+        fields: collectTemplateFieldsFromForm(formData),
+        updatedBy: userProfile?.uid || user?.uid || null,
+      });
+      setClientTemplateStatus("saved");
+      toast({
+        title: "Client template saved",
+        description:
+          "This client's company/terms will apply on new CRM invoices and PrepCorex sync fills.",
+      });
+    } catch (err) {
+      console.error("Failed to save client invoice template", err);
+      toast({
+        variant: "destructive",
+        title: "Could not save client template",
+        description: err instanceof Error ? err.message : "Try again.",
+      });
+    } finally {
+      setClientTemplateBusy(false);
+    }
+  }, [
+    collectTemplateFieldsFromForm,
+    formData,
+    toast,
+    user?.uid,
+    userProfile?.uid,
+  ]);
   const [lineCatalog, setLineCatalog] = useState<CrmInvoiceCatalogLine[]>([]);
   const [lineCatalogLoading, setLineCatalogLoading] = useState(false);
   const [lineCatalogBusy, setLineCatalogBusy] = useState(false);
@@ -622,6 +765,7 @@ export function InvoiceManagementPortal() {
         packaging: String(item.packaging || "").trim() || undefined,
       }));
       const subtotal = items.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+      const sourceUserId = String(payload.sourceUserId || "").trim() || null;
       setFormData({
         ...base,
         clientName: payload.clientName || "",
@@ -642,6 +786,7 @@ export function InvoiceManagementPortal() {
         discountValue: payload.discountValue,
         lateFee: payload.lateFee || 0,
         invoiceNote: payload.invoiceNote || base.invoiceNote,
+        prepcorexClientUserId: sourceUserId,
         status: "draft",
       });
       setEditingInvoiceId(null);
@@ -653,11 +798,27 @@ export function InvoiceManagementPortal() {
             ? `Merged ${payload.sourceInvoiceNumbers.length} invoice(s): ${payload.sourceInvoiceNumbers.join(", ")}`
             : "Line items were loaded into the invoice template.",
       });
+      void (async () => {
+        const template = await getClientInvoiceTemplate({
+          email: payload.clientEmail,
+          prepcorexClientUserId: sourceUserId,
+        });
+        if (!template) {
+          setClientTemplateStatus("missing");
+          return;
+        }
+        applyTemplateFieldsToForm(templateFieldsToInvoicePatch(template));
+        setClientTemplateStatus("loaded");
+        toast({
+          title: "Client invoice template applied",
+          description: `Using saved terms for ${template.clientName || template.clientEmail}.`,
+        });
+      })();
     } catch (error) {
       console.warn("PrepCorex invoice fill failed", error);
       prepcorexFillAppliedRef.current = false;
     }
-  }, [toast]);
+  }, [applyTemplateFieldsToForm, toast]);
   const [searchQuery, setSearchQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -998,6 +1159,7 @@ export function InvoiceManagementPortal() {
     setFormData(createEmptyInvoiceForm());
     setClientLookup("");
     setEditingInvoiceId(null);
+    setClientTemplateStatus("idle");
   };
 
   const applyContactToInvoiceForm = (contact: CrmAddressContact) => {
@@ -1012,6 +1174,10 @@ export function InvoiceManagementPortal() {
       clientZip: contact.zip || prev.clientZip,
       clientCountry: contact.country || prev.clientCountry,
     }));
+    void loadClientTemplateFor({
+      email: contact.email,
+      silent: true,
+    });
   };
 
   const upsertAddressBookFromInvoiceForm = async () => {
@@ -3752,25 +3918,64 @@ Prep Services FBA Team`;
                   </CardTitle>
                   <CardDescription className="text-fuchsia-600/80 dark:text-fuchsia-400/80 mt-1.5">
                     Fill out the invoice template and save or send it. Due date defaults to 5 business days.
+                    {clientTemplateStatus === "loaded" || clientTemplateStatus === "saved"
+                      ? " Client template is active for this email."
+                      : clientTemplateStatus === "missing"
+                        ? " No saved client template yet — save one below if terms differ."
+                        : ""}
                   </CardDescription>
                 </div>
-                {MERCURY_INTEGRATION_ENABLED ? (
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="shrink-0"
-                    disabled={egressIpLoading || !user}
-                    onClick={() => void fetchMercuryEgressIp()}
+                    disabled={clientTemplateBusy || !formData.clientEmail}
+                    onClick={() =>
+                      void loadClientTemplateFor({
+                        email: formData.clientEmail,
+                        prepcorexClientUserId: formData.prepcorexClientUserId,
+                      })
+                    }
                   >
-                    {egressIpLoading ? (
+                    {clientTemplateBusy ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
-                      <Globe className="mr-2 h-4 w-4" />
+                      <RotateCcw className="mr-2 h-4 w-4" />
                     )}
-                    Get Vercel IP for Mercury
+                    Load client template
                   </Button>
-                ) : null}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={clientTemplateBusy || !formData.clientEmail}
+                    onClick={() => void saveClientTemplateFromForm()}
+                  >
+                    {clientTemplateBusy ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="mr-2 h-4 w-4" />
+                    )}
+                    Save client template
+                  </Button>
+                  {MERCURY_INTEGRATION_ENABLED ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={egressIpLoading || !user}
+                      onClick={() => void fetchMercuryEgressIp()}
+                    >
+                      {egressIpLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Globe className="mr-2 h-4 w-4" />
+                      )}
+                      Get Vercel IP for Mercury
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -4785,7 +4990,14 @@ Prep Services FBA Team`;
                 </div>
 
                 <div className="border-t border-amber-200/70 pt-4 mt-6">
-                  <p className="text-xs uppercase text-amber-700 font-semibold mb-2">Terms & Conditions</p>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs uppercase text-amber-700 font-semibold">Terms & Conditions</p>
+                    {!isPrintMode ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        Saved per client email — used on CRM create, PrepCorex fill, and mirror.
+                      </p>
+                    ) : null}
+                  </div>
                   {isPrintMode ? (
                     <div className="text-xs text-amber-900 whitespace-pre-line">{formData.terms || "—"}</div>
                   ) : (

@@ -73,6 +73,8 @@ export type CrmInvoiceFillPayload = {
   createdAt: string;
   sourceSyncIds: string[];
   sourceInvoiceNumbers: string[];
+  /** PrepCorex client uid — used to load per-client CRM invoice template. */
+  sourceUserId?: string;
   clientName: string;
   clientEmail: string;
   clientPhone: string;
@@ -199,6 +201,7 @@ export function buildCrmInvoiceFillPayload(
     createdAt: new Date().toISOString(),
     sourceSyncIds: sorted.map((d) => d.id),
     sourceInvoiceNumbers,
+    sourceUserId: String(primary.sourceUserId || "").trim() || undefined,
     clientName: String(primary.clientName || "").trim(),
     clientEmail: String(primary.clientEmail || "").trim(),
     clientPhone: String(primary.clientPhone || "").trim(),

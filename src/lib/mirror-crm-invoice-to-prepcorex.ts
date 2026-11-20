@@ -2,6 +2,7 @@ import { addDoc, collection, doc, serverTimestamp, updateDoc } from "firebase/fi
 import { format } from "date-fns";
 import { db } from "@/lib/firebase";
 import { parseCrmStyleInvoiceLine } from "@/lib/invoice-line-parse";
+import { getClientInvoiceTemplate } from "@/lib/crm-client-invoice-template";
 
 type CrmItem = {
   description?: string;
@@ -49,6 +50,18 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
     total?: number;
     salesTax?: number;
     shippingCost?: number;
+    /** Per-client CRM template fields → PrepCorex PDF / portal. */
+    terms?: string | null;
+    invoiceNote?: string | null;
+    fobPoint?: string | null;
+    shippingTerms?: string | null;
+    shippedVia?: string | null;
+    companyName?: string | null;
+    companyAddress?: string | null;
+    companyCityStateZip?: string | null;
+    companyCountry?: string | null;
+    companyPhone?: string | null;
+    companyEmail?: string | null;
   };
 }): Promise<{ prepcorexInvoiceId: string; invoiceNumber: string }> {
   const clientUserId = String(input.clientUserId || "").trim();
@@ -104,6 +117,46 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
     items.reduce((sum, line) => sum + Number(line.amount || 0), 0);
   const grandTotal = Number(input.invoice.total) || subtotal;
 
+  // Prefer admin-saved per-client template over invoice snapshot when present.
+  let template: Awaited<ReturnType<typeof getClientInvoiceTemplate>> = null;
+  try {
+    template = await getClientInvoiceTemplate({
+      email: input.invoice.clientEmail,
+      prepcorexClientUserId: clientUserId,
+    });
+  } catch {
+    template = null;
+  }
+
+  const pick = (invoiceValue: unknown, templateValue: unknown) => {
+    const fromInvoice = String(invoiceValue || "").trim();
+    if (fromInvoice) return fromInvoice;
+    return String(templateValue || "").trim();
+  };
+
+  const terms = pick(input.invoice.terms, template?.terms);
+  const invoiceNote = pick(input.invoice.invoiceNote, template?.invoiceNote);
+  const fobPoint = pick(input.invoice.fobPoint, template?.fobPoint);
+  const shippingTerms = pick(input.invoice.shippingTerms, template?.shippingTerms);
+  const shippedVia = pick(input.invoice.shippedVia, template?.shippedVia);
+
+  const companyFields: Record<string, string> = {};
+  const companyName = pick(input.invoice.companyName, template?.companyName);
+  const companyAddress = pick(input.invoice.companyAddress, template?.companyAddress);
+  const companyCityStateZip = pick(
+    input.invoice.companyCityStateZip,
+    template?.companyCityStateZip
+  );
+  const companyCountry = pick(input.invoice.companyCountry, template?.companyCountry);
+  const companyPhone = pick(input.invoice.companyPhone, template?.companyPhone);
+  const companyEmail = pick(input.invoice.companyEmail, template?.companyEmail);
+  if (companyName) companyFields.companyName = companyName;
+  if (companyAddress) companyFields.companyAddress = companyAddress;
+  if (companyCityStateZip) companyFields.companyCityStateZip = companyCityStateZip;
+  if (companyCountry) companyFields.companyCountry = companyCountry;
+  if (companyPhone) companyFields.companyPhone = companyPhone;
+  if (companyEmail) companyFields.companyEmail = companyEmail;
+
   const ref = await addDoc(collection(db, `users/${clientUserId}/invoices`), {
     invoiceNumber,
     date: input.invoice.invoiceDate || format(new Date(), "yyyy-MM-dd"),
@@ -125,6 +178,12 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
     crmExternalInvoiceId: input.invoice.id,
     // Opt-in for PrepCorex client email automation (future mirrors only).
     enableClientInvoiceEmails: true,
+    ...(terms ? { terms } : {}),
+    ...(invoiceNote ? { invoiceNote } : {}),
+    ...(fobPoint ? { fobPoint } : {}),
+    ...(shippingTerms ? { shippingTerms } : {}),
+    ...(shippedVia ? { shippedVia } : {}),
+    ...companyFields,
     createdAt: new Date(),
     updatedAt: new Date(),
     userId: clientUserId,

@@ -9,6 +9,7 @@ export type PrepcorexSyncLineItem = {
   quantity: number;
   productName: string;
   packaging?: string;
+  sku?: string | null;
   shipTo?: string;
   shipDate?: string | null;
   unitPrice: number;
@@ -61,6 +62,10 @@ export type CrmInvoiceFillItem = {
   unitPrice: number;
   compareUnitPrice: number;
   amount: number;
+  /** Preserved for PrepCorex mirror / PDF DATE · SKU · PACK columns. */
+  shipDate?: string;
+  sku?: string;
+  packaging?: string;
 };
 
 export type CrmInvoiceFillPayload = {
@@ -89,11 +94,8 @@ function money(n: unknown): number {
 }
 
 function lineDescription(line: PrepcorexSyncLineItem): string {
-  const parts = [
-    String(line.productName || "").trim() || "Line item",
-    line.shipDate ? `Ship date: ${String(line.shipDate).trim()}` : "",
-  ].filter(Boolean);
-  return parts.join(" · ");
+  // Keep description as product name only — ship date / SKU / pack travel as fields.
+  return String(line.productName || "").trim() || "Line item";
 }
 
 function newItemId(): string {
@@ -124,6 +126,9 @@ export function buildCrmInvoiceFillPayload(
       const quantity = Math.max(0, Number(line.quantity) || 0);
       const unitPrice = money(line.unitPrice);
       const amount = money(line.amount != null ? line.amount : quantity * unitPrice);
+      const shipDate = String(line.shipDate || "").trim();
+      const sku = String(line.sku || "").trim();
+      const packaging = String(line.packaging || "").trim();
       items.push({
         id: newItemId(),
         description: lineDescription(line),
@@ -131,6 +136,9 @@ export function buildCrmInvoiceFillPayload(
         unitPrice,
         compareUnitPrice: 0,
         amount,
+        ...(shipDate ? { shipDate } : {}),
+        ...(sku ? { sku } : {}),
+        ...(packaging ? { packaging } : {}),
       });
     }
     for (const charge of doc.adminAdditionalCharges || []) {

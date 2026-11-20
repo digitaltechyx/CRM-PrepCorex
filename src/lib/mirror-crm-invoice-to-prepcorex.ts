@@ -1,12 +1,17 @@
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { format } from "date-fns";
 import { db } from "@/lib/firebase";
+import { parseCrmStyleInvoiceLine } from "@/lib/invoice-line-parse";
 
 type CrmItem = {
   description?: string;
   quantity?: number;
   unitPrice?: number;
   amount?: number;
+  shipDate?: string | null;
+  sku?: string | null;
+  packaging?: string | null;
+  productName?: string | null;
 };
 
 /** PrepCorex consolidated drafts start as DRAFT-PCX-… — never mirror that as the final number. */
@@ -60,18 +65,30 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
 
   const mapLines = (rows: CrmItem[] | undefined) =>
     (rows || [])
-      .filter((row) => String(row.description || "").trim())
+      .filter((row) => String(row.description || row.productName || "").trim())
       .map((row) => {
         const quantity = Number(row.quantity) || 0;
         const unitPrice = Number(row.unitPrice) || 0;
         const amount =
           Number(row.amount) ||
           Math.round(quantity * unitPrice * 100) / 100;
+        const raw = String(row.description || row.productName || "").trim();
+        const parsed = parseCrmStyleInvoiceLine(raw);
+        const shipDate =
+          String(row.shipDate || "").trim() ||
+          parsed.shipDate ||
+          format(new Date(), "dd/MM/yyyy");
+        const sku = String(row.sku || "").trim() || parsed.sku || "";
+        const packaging =
+          String(row.packaging || "").trim() ||
+          parsed.packaging ||
+          "Service";
         return {
           quantity,
-          productName: String(row.description || "").trim(),
-          shipDate: format(new Date(), "dd/MM/yyyy"),
-          packaging: "Service",
+          productName: parsed.productName || raw,
+          shipDate,
+          sku,
+          packaging,
           shipTo: "",
           unitPrice,
           amount,
@@ -106,6 +123,8 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
     type: "crm_mirrored",
     source: "crm_external_invoice_mirror",
     crmExternalInvoiceId: input.invoice.id,
+    // Opt-in for PrepCorex client email automation (future mirrors only).
+    enableClientInvoiceEmails: true,
     createdAt: new Date(),
     updatedAt: new Date(),
     userId: clientUserId,

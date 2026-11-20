@@ -143,6 +143,10 @@ interface ExternalInvoiceItem {
   /** Typical market / list unit price for value comparison (optional). */
   compareUnitPrice?: number;
   amount: number;
+  /** PrepCorex detail columns — preserved when filling from sync / mirroring back. */
+  shipDate?: string;
+  sku?: string;
+  packaging?: string;
 }
 
 interface ExternalInvoicePayment {
@@ -273,7 +277,7 @@ const INVOICE_TERMS = [
   "Prep Services FBA may pause receiving, prep, storage, and shipments until payment is completed.",
   "All completed labor services are non-refundable.",
   "Client is responsible for product compliance, labeling accuracy, and marketplace requirements.",
-  "Any billing concern must be reported within 48 hours of invoice receipt. Unauthorized chargebacks may result in service suspension.",
+  "Any billing concern must be reported within 5 business days of invoice receipt. Unauthorized chargebacks may result in service suspension.",
 ].join("\n");
 
 const createEmptyItem = (): ExternalInvoiceItem => ({
@@ -362,15 +366,37 @@ const addDaysToDateInput = (value: string, days: number): string => {
   return formatDateInputLocal(next);
 };
 
+const isWeekendDateInput = (value: string): boolean => {
+  const d = parseDateOnlyLocal(value);
+  if (!d) return false;
+  const day = d.getDay();
+  return day === 0 || day === 6;
+};
+
+/** Add N Mon–Fri business days to a YYYY-MM-DD date (weekends skipped). */
+const addBusinessDaysToDateInput = (value: string, businessDays: number): string => {
+  const steps = Math.trunc(Number(businessDays) || 0);
+  if (!steps) return value;
+  let current = value;
+  let remaining = Math.abs(steps);
+  const dir = steps > 0 ? 1 : -1;
+  while (remaining > 0) {
+    current = addDaysToDateInput(current, dir);
+    if (!isWeekendDateInput(current)) remaining -= 1;
+  }
+  return current;
+};
+
+const CRM_INVOICE_DUE_BUSINESS_DAYS = 5;
+
 const createEmptyInvoiceForm = (): Omit<ExternalInvoice, "id"> => {
   const today = new Date();
-  const due = new Date(today);
-  due.setDate(today.getDate() + 2);
+  const invoiceDate = formatDateInputLocal(today);
   return {
     status: "draft",
     invoiceNumber: createInvoiceNumber(),
-    invoiceDate: formatDateInputLocal(today),
-    dueDate: formatDateInputLocal(due),
+    invoiceDate,
+    dueDate: addBusinessDaysToDateInput(invoiceDate, CRM_INVOICE_DUE_BUSINESS_DAYS),
     ...DEFAULT_COMPANY,
     ...DEFAULT_INVOICE_META,
     clientName: "",
@@ -591,6 +617,9 @@ export function InvoiceManagementPortal() {
         unitPrice: Number(item.unitPrice) || 0,
         compareUnitPrice: Number(item.compareUnitPrice) || 0,
         amount: Number(item.amount) || 0,
+        shipDate: String(item.shipDate || "").trim() || undefined,
+        sku: String(item.sku || "").trim() || undefined,
+        packaging: String(item.packaging || "").trim() || undefined,
       }));
       const subtotal = items.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
       setFormData({
@@ -1327,7 +1356,7 @@ export function InvoiceManagementPortal() {
     discount: getDiscountAmount(invoice),
     lateFee: invoice.lateFee || 0,
     total: getGrandTotalWithLateFee(invoice),
-    terms: invoice.terms,
+    terms: (invoice.terms || "").trim() || INVOICE_TERMS,
     ...resolveInvoiceMeta(invoice),
   };
   };
@@ -2277,25 +2306,21 @@ Prep Services FBA Team`;
     }
   };
 
+  const normalizeExternalItem = (it: ExternalInvoiceItem): ExternalInvoiceItem => ({
+    id: it.id || crypto.randomUUID(),
+    description: String(it.description ?? ""),
+    quantity: Number(it.quantity ?? 0),
+    unitPrice: Number(it.unitPrice ?? 0),
+    compareUnitPrice: Number(it.compareUnitPrice ?? 0),
+    amount: Number(it.amount ?? 0),
+    shipDate: String(it.shipDate || "").trim() || undefined,
+    sku: String(it.sku || "").trim() || undefined,
+    packaging: String(it.packaging || "").trim() || undefined,
+  });
+
   const handleEditInvoice = (invoice: ExternalInvoice) => {
-    const normalizedItems = (invoice.items || []).map((it: ExternalInvoiceItem) => ({
-      id: it.id || crypto.randomUUID(),
-      description: String(it.description ?? ""),
-      quantity: Number(it.quantity ?? 0),
-      unitPrice: Number(it.unitPrice ?? 0),
-      compareUnitPrice: Number(it.compareUnitPrice ?? 0),
-      amount: Number(it.amount ?? 0),
-    }));
-    const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(
-      (it: ExternalInvoiceItem) => ({
-        id: it.id || crypto.randomUUID(),
-        description: String(it.description ?? ""),
-        quantity: Number(it.quantity ?? 0),
-        unitPrice: Number(it.unitPrice ?? 0),
-        compareUnitPrice: Number(it.compareUnitPrice ?? 0),
-        amount: Number(it.amount ?? 0),
-      })
-    );
+    const normalizedItems = (invoice.items || []).map(normalizeExternalItem);
+    const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(normalizeExternalItem);
     setFormData({
       ...invoice,
       ...DEFAULT_COMPANY,
@@ -2319,27 +2344,17 @@ Prep Services FBA Team`;
   /** Clone any-status invoice into a new draft form (new number; payments/status cleared). */
   const handleCopyInvoice = (invoice: ExternalInvoice) => {
     const today = new Date();
-    const due = new Date(today);
-    due.setDate(today.getDate() + 2);
+    const invoiceDate = formatDateInputLocal(today);
+    const dueDate = addBusinessDaysToDateInput(invoiceDate, CRM_INVOICE_DUE_BUSINESS_DAYS);
 
-    const normalizedItems = (invoice.items || []).map((it: ExternalInvoiceItem) => ({
+    const normalizedItems = (invoice.items || []).map((it) => ({
+      ...normalizeExternalItem(it),
       id: crypto.randomUUID(),
-      description: String(it.description ?? ""),
-      quantity: Number(it.quantity ?? 0),
-      unitPrice: Number(it.unitPrice ?? 0),
-      compareUnitPrice: Number(it.compareUnitPrice ?? 0),
-      amount: Number(it.amount ?? 0),
     }));
-    const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(
-      (it: ExternalInvoiceItem) => ({
-        id: crypto.randomUUID(),
-        description: String(it.description ?? ""),
-        quantity: Number(it.quantity ?? 0),
-        unitPrice: Number(it.unitPrice ?? 0),
-        compareUnitPrice: Number(it.compareUnitPrice ?? 0),
-        amount: Number(it.amount ?? 0),
-      })
-    );
+    const normalizedShippingLabels = (invoice.shippingLabelItems || []).map((it) => ({
+      ...normalizeExternalItem(it),
+      id: crypto.randomUUID(),
+    }));
 
     const shippingCost = Number(invoice.shippingCost ?? 0);
     const salesTax = Number(invoice.salesTax ?? 0);
@@ -2351,8 +2366,8 @@ Prep Services FBA Team`;
     setFormData({
       status: "draft",
       invoiceNumber: createInvoiceNumber(),
-      invoiceDate: formatDateInputLocal(today),
-      dueDate: formatDateInputLocal(due),
+      invoiceDate,
+      dueDate,
       companyName: invoice.companyName || DEFAULT_COMPANY.companyName,
       companyAddress: invoice.companyAddress || DEFAULT_COMPANY.companyAddress,
       companyCityStateZip: invoice.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
@@ -3736,7 +3751,7 @@ Prep Services FBA Team`;
                     {editingInvoiceId ? "Edit Invoice" : "New Invoice"}
                   </CardTitle>
                   <CardDescription className="text-fuchsia-600/80 dark:text-fuchsia-400/80 mt-1.5">
-                    Fill out the invoice template and save or send it. Due date defaults to 48 hours.
+                    Fill out the invoice template and save or send it. Due date defaults to 5 business days.
                   </CardDescription>
                 </div>
                 {MERCURY_INTEGRATION_ENABLED ? (

@@ -22,6 +22,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   orderBy,
   query,
@@ -747,91 +748,95 @@ export function InvoiceManagementPortal() {
     }
     if (!raw) return;
     prepcorexFillAppliedRef.current = true;
-    try {
-      sessionStorage.removeItem(CRM_INVOICE_FILL_STORAGE_KEY);
-      const payload = JSON.parse(raw) as CrmInvoiceFillPayload;
-      if (!payload || payload.version !== 1 || !Array.isArray(payload.items)) return;
 
-      const base = createEmptyInvoiceForm();
-      const items = payload.items.map((item) => ({
-        id: item.id || crypto.randomUUID(),
-        description: String(item.description || ""),
-        quantity: Number(item.quantity) || 1,
-        unitPrice: Number(item.unitPrice) || 0,
-        compareUnitPrice: Number(item.compareUnitPrice) || 0,
-        amount: Number(item.amount) || 0,
-        shipDate: String(item.shipDate || "").trim() || undefined,
-        sku: String(item.sku || "").trim() || undefined,
-        packaging: String(item.packaging || "").trim() || undefined,
-      }));
-      const subtotal = items.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-      const sourceUserId = String(payload.sourceUserId || "").trim() || null;
-      let resolvedEmail = String(payload.clientEmail || "").trim();
-      let resolvedName = String(payload.clientName || "").trim();
-      let resolvedPhone = String(payload.clientPhone || "").trim();
-      let resolvedAddress = String(payload.clientAddress || "").trim();
-
-      // If PrepCorex sync only had a name, resolve email from the client user profile
-      // so per-client invoice templates (keyed by email) still load.
-      if (sourceUserId && !resolvedEmail) {
-        try {
-          const { getDoc, doc: fsDoc } = await import("firebase/firestore");
-          const userSnap = await getDoc(fsDoc(db, "users", sourceUserId));
-          if (userSnap.exists()) {
-            const userData = userSnap.data() as Record<string, unknown>;
-            resolvedEmail = String(userData.email || "").trim();
-            if (!resolvedName) {
-              resolvedName = String(
-                userData.name || userData.companyName || userData.displayName || ""
-              ).trim();
-            }
-            if (!resolvedPhone) {
-              resolvedPhone = String(userData.phone || "").trim();
-            }
-            if (!resolvedAddress) {
-              resolvedAddress = String(
-                userData.address || userData.companyAddress || ""
-              ).trim();
-            }
-          }
-        } catch (lookupErr) {
-          console.warn("Could not resolve PrepCorex client email for template", lookupErr);
+    void (async () => {
+      try {
+        sessionStorage.removeItem(CRM_INVOICE_FILL_STORAGE_KEY);
+        const payload = JSON.parse(raw) as CrmInvoiceFillPayload;
+        if (!payload || payload.version !== 1 || !Array.isArray(payload.items)) {
+          prepcorexFillAppliedRef.current = false;
+          return;
         }
-      }
 
-      setFormData({
-        ...base,
-        clientName: resolvedName || "",
-        clientEmail: resolvedEmail || "",
-        clientPhone: resolvedPhone || "",
-        clientAddress: resolvedAddress || "",
-        invoiceDate: payload.invoiceDate || base.invoiceDate,
-        dueDate: payload.dueDate || base.dueDate,
-        items: items.length > 0 ? items : base.items,
-        shippingLabelItems: [],
-        subtotal,
-        salesTax: 0,
-        shippingCost: 0,
-        total: subtotal,
-        amountPaid: 0,
-        outstandingBalance: subtotal + (Number(payload.lateFee) || 0),
-        discountType: payload.discountType,
-        discountValue: payload.discountValue,
-        lateFee: payload.lateFee || 0,
-        invoiceNote: payload.invoiceNote || base.invoiceNote,
-        prepcorexClientUserId: sourceUserId,
-        status: "draft",
-      });
-      setEditingInvoiceId(null);
-      setActiveTab("new");
-      toast({
-        title: "Template filled from PrepCorex",
-        description:
-          payload.sourceInvoiceNumbers?.length > 0
-            ? `Merged ${payload.sourceInvoiceNumbers.length} invoice(s): ${payload.sourceInvoiceNumbers.join(", ")}`
-            : "Line items were loaded into the invoice template.",
-      });
-      void (async () => {
+        const base = createEmptyInvoiceForm();
+        const items = payload.items.map((item) => ({
+          id: item.id || crypto.randomUUID(),
+          description: String(item.description || ""),
+          quantity: Number(item.quantity) || 1,
+          unitPrice: Number(item.unitPrice) || 0,
+          compareUnitPrice: Number(item.compareUnitPrice) || 0,
+          amount: Number(item.amount) || 0,
+          shipDate: String(item.shipDate || "").trim() || undefined,
+          sku: String(item.sku || "").trim() || undefined,
+          packaging: String(item.packaging || "").trim() || undefined,
+        }));
+        const subtotal = items.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+        const sourceUserId = String(payload.sourceUserId || "").trim() || null;
+        let resolvedEmail = String(payload.clientEmail || "").trim();
+        let resolvedName = String(payload.clientName || "").trim();
+        let resolvedPhone = String(payload.clientPhone || "").trim();
+        let resolvedAddress = String(payload.clientAddress || "").trim();
+
+        // If PrepCorex sync only had a name, resolve email from the client user profile
+        // so per-client invoice templates (keyed by email) still load.
+        if (sourceUserId && !resolvedEmail) {
+          try {
+            const userSnap = await getDoc(doc(db, "users", sourceUserId));
+            if (userSnap.exists()) {
+              const userData = userSnap.data() as Record<string, unknown>;
+              resolvedEmail = String(userData.email || "").trim();
+              if (!resolvedName) {
+                resolvedName = String(
+                  userData.name || userData.companyName || userData.displayName || ""
+                ).trim();
+              }
+              if (!resolvedPhone) {
+                resolvedPhone = String(userData.phone || "").trim();
+              }
+              if (!resolvedAddress) {
+                resolvedAddress = String(
+                  userData.address || userData.companyAddress || ""
+                ).trim();
+              }
+            }
+          } catch (lookupErr) {
+            console.warn("Could not resolve PrepCorex client email for template", lookupErr);
+          }
+        }
+
+        setFormData({
+          ...base,
+          clientName: resolvedName || "",
+          clientEmail: resolvedEmail || "",
+          clientPhone: resolvedPhone || "",
+          clientAddress: resolvedAddress || "",
+          invoiceDate: payload.invoiceDate || base.invoiceDate,
+          dueDate: payload.dueDate || base.dueDate,
+          items: items.length > 0 ? items : base.items,
+          shippingLabelItems: [],
+          subtotal,
+          salesTax: 0,
+          shippingCost: 0,
+          total: subtotal,
+          amountPaid: 0,
+          outstandingBalance: subtotal + (Number(payload.lateFee) || 0),
+          discountType: payload.discountType,
+          discountValue: payload.discountValue,
+          lateFee: payload.lateFee || 0,
+          invoiceNote: payload.invoiceNote || base.invoiceNote,
+          prepcorexClientUserId: sourceUserId,
+          status: "draft",
+        });
+        setEditingInvoiceId(null);
+        setActiveTab("new");
+        toast({
+          title: "Template filled from PrepCorex",
+          description:
+            payload.sourceInvoiceNumbers?.length > 0
+              ? `Merged ${payload.sourceInvoiceNumbers.length} invoice(s): ${payload.sourceInvoiceNumbers.join(", ")}`
+              : "Line items were loaded into the invoice template.",
+        });
+
         const template = await getClientInvoiceTemplate({
           email: resolvedEmail,
           prepcorexClientUserId: sourceUserId,
@@ -846,11 +851,11 @@ export function InvoiceManagementPortal() {
           title: "Client invoice template applied",
           description: `Using saved terms for ${template.clientName || template.clientEmail}.`,
         });
-      })();
-    } catch (error) {
-      console.warn("PrepCorex invoice fill failed", error);
-      prepcorexFillAppliedRef.current = false;
-    }
+      } catch (error) {
+        console.warn("PrepCorex invoice fill failed", error);
+        prepcorexFillAppliedRef.current = false;
+      }
+    })();
   }, [applyTemplateFieldsToForm, toast]);
   const [searchQuery, setSearchQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");

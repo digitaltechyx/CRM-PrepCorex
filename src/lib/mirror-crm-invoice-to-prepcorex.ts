@@ -2,7 +2,11 @@ import { addDoc, collection, doc, serverTimestamp, updateDoc } from "firebase/fi
 import { format } from "date-fns";
 import { db } from "@/lib/firebase";
 import { parseCrmStyleInvoiceLine } from "@/lib/invoice-line-parse";
-import { getClientInvoiceTemplate } from "@/lib/crm-client-invoice-template";
+import {
+  getClientInvoiceTemplate,
+  saveClientInvoiceTemplate,
+} from "@/lib/crm-client-invoice-template";
+import { buildPrepcorexOrderOpenUrl } from "@/lib/prepcorex-order-open";
 
 type CrmItem = {
   description?: string;
@@ -14,6 +18,8 @@ type CrmItem = {
   packaging?: string | null;
   productName?: string | null;
   shipTo?: string | null;
+  orderNumber?: string | null;
+  orderUrl?: string | null;
 };
 
 /** PrepCorex consolidated drafts start as DRAFT-PCX-… — never mirror that as the final number. */
@@ -88,6 +94,7 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
           Math.round(quantity * unitPrice * 100) / 100;
         const raw = String(row.description || row.productName || "").trim();
         const parsed = parseCrmStyleInvoiceLine(raw);
+        const productName = parsed.productName || raw;
         const shipDate =
           String(row.shipDate || "").trim() ||
           parsed.shipDate ||
@@ -98,15 +105,24 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
           String(row.packaging || "").trim() ||
           parsed.packaging ||
           "";
+        const orderFromDesc =
+          String(row.orderNumber || "").trim() ||
+          (/^Order\s+([A-Za-z0-9_-]+)/i.exec(productName)?.[1] || "").trim();
+        const orderUrl =
+          (orderFromDesc
+            ? buildPrepcorexOrderOpenUrl(clientUserId, orderFromDesc)
+            : "") || String(row.orderUrl || "").trim();
         return {
           quantity,
-          productName: parsed.productName || raw,
+          productName,
           shipDate,
           sku,
           packaging,
           shipTo: String(row.shipTo || "").trim(),
           unitPrice,
           amount,
+          ...(orderFromDesc ? { orderNumber: orderFromDesc } : {}),
+          ...(orderUrl ? { orderUrl, descriptionUrl: orderUrl } : {}),
         };
       });
 
@@ -197,6 +213,36 @@ export async function mirrorCrmInvoiceToPrepcorex(input: {
     showInPrepcorex: true,
     updatedAt: serverTimestamp(),
   });
+
+  // Keep CRM "saved template" in sync with what was mirrored to PrepCorex.
+  const templateEmail = String(input.invoice.clientEmail || "").trim();
+  if (templateEmail) {
+    try {
+      await saveClientInvoiceTemplate({
+        clientEmail: templateEmail,
+        clientName: input.invoice.clientName || "",
+        prepcorexClientUserId: clientUserId,
+        fields: {
+          companyName: companyName || "",
+          companyAddress: companyAddress || "",
+          companyCityStateZip: companyCityStateZip || "",
+          companyCountry: companyCountry || "",
+          companyPhone: companyPhone || "",
+          companyEmail: companyEmail || "",
+          invoiceNote: invoiceNote || "",
+          fobPoint: fobPoint || "",
+          shippingTerms: shippingTerms || "",
+          shippedVia: shippedVia || "",
+          terms: terms || "",
+        },
+      });
+    } catch (templateErr) {
+      console.warn(
+        "[mirror-crm-invoice] could not sync CRM client invoice template",
+        templateErr
+      );
+    }
+  }
 
   return { prepcorexInvoiceId: ref.id, invoiceNumber };
 }

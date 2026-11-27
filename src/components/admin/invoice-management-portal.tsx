@@ -1257,6 +1257,7 @@ export function InvoiceManagementPortal() {
     }));
     void loadClientTemplateFor({
       email: contact.email,
+      prepcorexClientUserId: formData.prepcorexClientUserId || null,
       silent: true,
     });
   };

@@ -155,6 +155,10 @@ interface ExternalInvoiceItem {
   shipDate?: string;
   sku?: string;
   packaging?: string;
+  /** PrepCorex outbound request id when this line is one consolidated order. */
+  orderNumber?: string;
+  /** Opens PrepCorex admin Shipped Orders filtered to this order. */
+  orderUrl?: string;
 }
 
 interface ExternalInvoicePayment {
@@ -183,6 +187,8 @@ interface ExternalInvoice {
   id: string;
   status: ExternalInvoiceStatus;
   invoiceNumber: string;
+  /** Internal PrepCorex draft ref (DRAFT-PCX-…). Not shown on client PDFs. */
+  draftReference?: string | null;
   invoiceDate: string;
   dueDate: string;
   /** Bill-from company (editable per invoice; defaults to Prep Services FBA). */
@@ -1540,15 +1546,35 @@ export function InvoiceManagementPortal() {
       country: invoice.clientCountry || "",
     },
     items: [
-      ...invoice.items.map((item) => ({
-        description: item.description || "",
-        quantity: Number(item.quantity || 0),
-        unitPrice: Number(item.unitPrice || 0),
-        amount: Number(item.amount || 0),
-        shipDate: String(item.shipDate || "").trim() || undefined,
-        sku: String(item.sku || "").trim() || undefined,
-        packaging: String(item.packaging || "").trim() || undefined,
-      })),
+      ...invoice.items.map((item) => {
+        const orderNumber =
+          String(item.orderNumber || "").trim() ||
+          (String(item.description || "").match(/^Order\s+(.+)$/i)?.[1] || "").trim();
+        const clientUid = String(invoice.prepcorexClientUserId || "").trim();
+        const appBase = (
+          process.env.NEXT_PUBLIC_APP_URL || "https://prepcorex.com"
+        ).replace(/\/$/, "");
+        const descriptionUrl =
+          String(item.orderUrl || "").trim() ||
+          (orderNumber && clientUid
+            ? `${appBase}/admin/dashboard/inventory?${new URLSearchParams({
+                userId: clientUid,
+                section: "shipped-orders",
+                status: "shipped",
+                search: orderNumber,
+              }).toString()}`
+            : "");
+        return {
+          description: item.description || "",
+          quantity: Number(item.quantity || 0),
+          unitPrice: Number(item.unitPrice || 0),
+          amount: Number(item.amount || 0),
+          shipDate: String(item.shipDate || "").trim() || undefined,
+          sku: String(item.sku || "").trim() || undefined,
+          packaging: String(item.packaging || "").trim() || undefined,
+          descriptionUrl: descriptionUrl || undefined,
+        };
+      }),
       ...(invoice.shippingLabelItems || [])
         .filter(
           (item) =>
@@ -2309,15 +2335,16 @@ Prep Services FBA Team`;
 
   const downloadInvoicePdf = async (invoice: ExternalInvoice) => {
     try {
-      const blob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(invoice));
-      triggerBlobDownload(blob, `Invoice-${invoice.invoiceNumber}.pdf`);
+      const finalized = await ensureFinalInvoiceNumber(invoice);
+      const blob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(finalized));
+      triggerBlobDownload(blob, `Invoice-${finalized.invoiceNumber}.pdf`);
 
       const savingsFile = await buildInvoiceSavingsPdfFile({
-        invoiceNumber: invoice.invoiceNumber,
-        invoiceDate: invoice.invoiceDate,
-        clientName: invoice.clientName,
-        items: invoice.items || [],
-        shippingLabelItems: invoice.shippingLabelItems || [],
+        invoiceNumber: finalized.invoiceNumber,
+        invoiceDate: finalized.invoiceDate,
+        clientName: finalized.clientName,
+        items: finalized.items || [],
+        shippingLabelItems: finalized.shippingLabelItems || [],
       });
       if (savingsFile) {
         await new Promise((resolve) => setTimeout(resolve, 350));
@@ -2374,7 +2401,8 @@ Prep Services FBA Team`;
 
   const viewInvoicePdf = async (invoice: ExternalInvoice) => {
     try {
-      const blob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(invoice));
+      const finalized = await ensureFinalInvoiceNumber(invoice);
+      const blob = await generateQuoteInvoicePdfBlob(buildInvoicePdfData(finalized));
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank", "noopener,noreferrer");
       setTimeout(() => URL.revokeObjectURL(url), 10000);
@@ -2532,29 +2560,37 @@ Prep Services FBA Team`;
     shipDate: String(it.shipDate || "").trim() || undefined,
     sku: String(it.sku || "").trim() || undefined,
     packaging: String(it.packaging || "").trim() || undefined,
+    orderNumber: String(it.orderNumber || "").trim() || undefined,
+    orderUrl: String(it.orderUrl || "").trim() || undefined,
   });
 
   const handleEditInvoice = (invoice: ExternalInvoice) => {
-    const normalizedItems = (invoice.items || []).map(normalizeExternalItem);
-    const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(normalizeExternalItem);
-    setFormData({
-      ...invoice,
-      ...DEFAULT_COMPANY,
-      companyName: invoice.companyName || DEFAULT_COMPANY.companyName,
-      companyAddress: invoice.companyAddress || DEFAULT_COMPANY.companyAddress,
-      companyCityStateZip: invoice.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
-      companyCountry: invoice.companyCountry || DEFAULT_COMPANY.companyCountry,
-      companyPhone: invoice.companyPhone || DEFAULT_COMPANY.companyPhone,
-      companyEmail: invoice.companyEmail || DEFAULT_COMPANY.companyEmail,
-      invoiceNote: invoice.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
-      fobPoint: invoice.fobPoint || DEFAULT_INVOICE_META.fobPoint,
-      shippingTerms: invoice.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
-      shippedVia: invoice.shippedVia || DEFAULT_INVOICE_META.shippedVia,
-      items: normalizedItems.length ? normalizedItems : [createEmptyItem()],
-      shippingLabelItems: normalizedShippingLabels,
-    });
-    setEditingInvoiceId(invoice.id);
-    setActiveTab("new");
+    void (async () => {
+      const finalized = await ensureFinalInvoiceNumber(invoice);
+      const normalizedItems = (finalized.items || []).map(normalizeExternalItem);
+      const normalizedShippingLabels = (finalized.shippingLabelItems || []).map(
+        normalizeExternalItem
+      );
+      setFormData({
+        ...finalized,
+        ...DEFAULT_COMPANY,
+        companyName: finalized.companyName || DEFAULT_COMPANY.companyName,
+        companyAddress: finalized.companyAddress || DEFAULT_COMPANY.companyAddress,
+        companyCityStateZip:
+          finalized.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
+        companyCountry: finalized.companyCountry || DEFAULT_COMPANY.companyCountry,
+        companyPhone: finalized.companyPhone || DEFAULT_COMPANY.companyPhone,
+        companyEmail: finalized.companyEmail || DEFAULT_COMPANY.companyEmail,
+        invoiceNote: finalized.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
+        fobPoint: finalized.fobPoint || DEFAULT_INVOICE_META.fobPoint,
+        shippingTerms: finalized.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
+        shippedVia: finalized.shippedVia || DEFAULT_INVOICE_META.shippedVia,
+        items: normalizedItems.length ? normalizedItems : [createEmptyItem()],
+        shippingLabelItems: normalizedShippingLabels,
+      });
+      setEditingInvoiceId(finalized.id);
+      setActiveTab("new");
+    })();
   };
 
   /** Clone any-status invoice into a new draft form (new number; payments/status cleared). */
@@ -2727,17 +2763,23 @@ Prep Services FBA Team`;
     setEmailDialogOpen(true);
   };
 
-  /** Replace DRAFT-PCX-… with a real INV-… before send / mark-as-sent / PrepCorex sync. */
+  /** Replace DRAFT-PCX-… with a real INV-… before view / download / send. Keep DRAFT as draftReference. */
   const ensureFinalInvoiceNumber = async (
     invoice: ExternalInvoice
   ): Promise<ExternalInvoice> => {
+    if (!invoice.id || invoice.id === "preview") return invoice;
     if (!isDraftPlaceholderInvoiceNumber(invoice.invoiceNumber)) return invoice;
     const invoiceNumber = createInvoiceNumber();
+    const draftReference =
+      String(invoice.draftReference || "").trim() ||
+      String(invoice.invoiceNumber || "").trim() ||
+      null;
     await updateDoc(doc(db, "external_invoices", invoice.id), {
       invoiceNumber,
+      ...(draftReference ? { draftReference } : {}),
       updatedAt: serverTimestamp(),
     });
-    return { ...invoice, invoiceNumber };
+    return { ...invoice, invoiceNumber, draftReference };
   };
 
   const openMarkAsSentDialog = (invoice: ExternalInvoice) => {
@@ -4104,6 +4146,11 @@ Prep Services FBA Team`;
                             />
                           )}
                         </div>
+                        {formData.draftReference ? (
+                          <p className="text-[11px] text-muted-foreground sm:text-right">
+                            Internal ref: {formData.draftReference}
+                          </p>
+                        ) : null}
                         <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-end">
                           <span>Date:</span>
                           {isPrintMode ? (
@@ -4525,7 +4572,18 @@ Prep Services FBA Team`;
                                 </label>
                                 {isPrintMode ? (
                                   <p className="text-sm whitespace-pre-wrap break-words">
-                                    {item.description || "—"}
+                                    {item.orderUrl ? (
+                                      <a
+                                        href={item.orderUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-blue-600 underline underline-offset-2"
+                                      >
+                                        {item.description || "—"}
+                                      </a>
+                                    ) : (
+                                      item.description || "—"
+                                    )}
                                   </p>
                                 ) : (
                                   <>
@@ -4579,6 +4637,16 @@ Prep Services FBA Team`;
                                       rows={2}
                                       className="min-h-9 border-amber-200/70 w-full resize-y"
                                     />
+                                    {item.orderUrl ? (
+                                      <a
+                                        href={item.orderUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex text-[11px] font-medium text-blue-600 underline underline-offset-2"
+                                      >
+                                        Open shipped order
+                                      </a>
+                                    ) : null}
                                     <div className="grid grid-cols-3 gap-1.5">
                                       <Input
                                         value={item.shipDate || ""}

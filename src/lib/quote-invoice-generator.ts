@@ -15,6 +15,8 @@ interface QuoteInvoiceItem {
   quantity: number;
   unitPrice: number;
   amount: number;
+  /** Optional clickable URL (e.g. PrepCorex shipped order deep link). */
+  descriptionUrl?: string;
 }
 
 interface QuoteInvoiceData {
@@ -197,7 +199,14 @@ export async function generateQuoteInvoicePdfBlob(data: QuoteInvoiceData): Promi
     const desc = item.description || "—";
     const lines = doc.splitTextToSize(desc, descriptionWidth);
     const firstLine = lines[0] ?? "—";
-    doc.text(firstLine, margin, y);
+    const linkUrl = String(item.descriptionUrl || "").trim();
+    if (linkUrl) {
+      doc.setTextColor(37, 99, 235);
+      doc.textWithLink(firstLine, margin, y, { url: linkUrl });
+      doc.setTextColor(0, 0, 0);
+    } else {
+      doc.text(firstLine, margin, y);
+    }
     doc.text(String(item.quantity), margin + 92, y);
     doc.text(`$${item.unitPrice.toFixed(2)}`, margin + 120, y);
     doc.text(`$${item.amount.toFixed(2)}`, pageWidth - margin, y, { align: "right" });

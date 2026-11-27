@@ -69,6 +69,7 @@ import {
   templateFieldsToInvoicePatch,
   type CrmClientInvoiceTemplateFields,
 } from "@/lib/crm-client-invoice-template";
+import { resolvePrepcorexOrderOpenUrl } from "@/lib/prepcorex-order-open";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -522,6 +523,42 @@ export function InvoiceManagementPortal() {
     []
   );
   const { data: invoices, loading } = useCollection<ExternalInvoice>("external_invoices", invoicesQuery);
+  const prematureDraftRepairRef = useRef<Set<string>>(new Set());
+
+  // PrepCorex drafts that got an early INV-… should show DRAFT-PCX-… again until View/Send.
+  useEffect(() => {
+    if (loading || !invoices?.length) return;
+    const toRepair = invoices.filter((inv) => {
+      if (!inv.id || prematureDraftRepairRef.current.has(inv.id)) return false;
+      if (inv.status !== "draft") return false;
+      if (!inv.prepcorexClientUserId && !String(inv.consolidationKey || "").includes("prepcorex")) {
+        return false;
+      }
+      const draftRef = String(inv.draftReference || "").trim();
+      const number = String(inv.invoiceNumber || "").trim();
+      return (
+        isDraftPlaceholderInvoiceNumber(draftRef) &&
+        !isDraftPlaceholderInvoiceNumber(number)
+      );
+    });
+    if (toRepair.length === 0) return;
+    void (async () => {
+      for (const inv of toRepair) {
+        prematureDraftRepairRef.current.add(inv.id);
+        const draftRef = String(inv.draftReference || "").trim();
+        try {
+          await updateDoc(doc(db, "external_invoices", inv.id), {
+            invoiceNumber: draftRef,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (err) {
+          prematureDraftRepairRef.current.delete(inv.id);
+          console.warn("[crm-draft] could not restore DRAFT-PCX number", inv.id, err);
+        }
+      }
+    })();
+  }, [invoices, loading]);
+
   const contactsQuery = useMemo(
     () => query(collection(db, "crm_contacts"), orderBy("updatedAt", "desc")),
     []
@@ -1551,19 +1588,11 @@ export function InvoiceManagementPortal() {
           String(item.orderNumber || "").trim() ||
           (String(item.description || "").match(/^Order\s+(.+)$/i)?.[1] || "").trim();
         const clientUid = String(invoice.prepcorexClientUserId || "").trim();
-        const appBase = (
-          process.env.NEXT_PUBLIC_APP_URL || "https://prepcorex.com"
-        ).replace(/\/$/, "");
-        const descriptionUrl =
-          String(item.orderUrl || "").trim() ||
-          (orderNumber && clientUid
-            ? `${appBase}/admin/dashboard/inventory?${new URLSearchParams({
-                userId: clientUid,
-                section: "shipped-orders",
-                status: "shipped",
-                search: orderNumber,
-              }).toString()}`
-            : "");
+        const descriptionUrl = resolvePrepcorexOrderOpenUrl({
+          orderNumber,
+          clientUserId: clientUid,
+          storedOrderUrl: item.orderUrl,
+        });
         return {
           description: item.description || "",
           quantity: Number(item.quantity || 0),
@@ -2566,29 +2595,29 @@ Prep Services FBA Team`;
 
   const handleEditInvoice = (invoice: ExternalInvoice) => {
     void (async () => {
-      const finalized = await ensureFinalInvoiceNumber(invoice);
-      const normalizedItems = (finalized.items || []).map(normalizeExternalItem);
-      const normalizedShippingLabels = (finalized.shippingLabelItems || []).map(
+      // Keep DRAFT-PCX-… while editing; INV- is assigned only on View / Download / Send / Sync.
+      const normalizedItems = (invoice.items || []).map(normalizeExternalItem);
+      const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(
         normalizeExternalItem
       );
       setFormData({
-        ...finalized,
+        ...invoice,
         ...DEFAULT_COMPANY,
-        companyName: finalized.companyName || DEFAULT_COMPANY.companyName,
-        companyAddress: finalized.companyAddress || DEFAULT_COMPANY.companyAddress,
+        companyName: invoice.companyName || DEFAULT_COMPANY.companyName,
+        companyAddress: invoice.companyAddress || DEFAULT_COMPANY.companyAddress,
         companyCityStateZip:
-          finalized.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
-        companyCountry: finalized.companyCountry || DEFAULT_COMPANY.companyCountry,
-        companyPhone: finalized.companyPhone || DEFAULT_COMPANY.companyPhone,
-        companyEmail: finalized.companyEmail || DEFAULT_COMPANY.companyEmail,
-        invoiceNote: finalized.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
-        fobPoint: finalized.fobPoint || DEFAULT_INVOICE_META.fobPoint,
-        shippingTerms: finalized.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
-        shippedVia: finalized.shippedVia || DEFAULT_INVOICE_META.shippedVia,
+          invoice.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
+        companyCountry: invoice.companyCountry || DEFAULT_COMPANY.companyCountry,
+        companyPhone: invoice.companyPhone || DEFAULT_COMPANY.companyPhone,
+        companyEmail: invoice.companyEmail || DEFAULT_COMPANY.companyEmail,
+        invoiceNote: invoice.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
+        fobPoint: invoice.fobPoint || DEFAULT_INVOICE_META.fobPoint,
+        shippingTerms: invoice.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
+        shippedVia: invoice.shippedVia || DEFAULT_INVOICE_META.shippedVia,
         items: normalizedItems.length ? normalizedItems : [createEmptyItem()],
         shippingLabelItems: normalizedShippingLabels,
       });
-      setEditingInvoiceId(finalized.id);
+      setEditingInvoiceId(invoice.id);
       setActiveTab("new");
     })();
   };
@@ -4558,6 +4587,14 @@ Prep Services FBA Team`;
                           compare > unit && compare > 0
                             ? Number(((compare - unit) * qty).toFixed(2))
                             : 0;
+                        const orderOpenHref = resolvePrepcorexOrderOpenUrl({
+                          orderNumber:
+                            String(item.orderNumber || "").trim() ||
+                            (String(item.description || "").match(/^Order\s+(.+)$/i)?.[1] ||
+                              "").trim(),
+                          clientUserId: formData.prepcorexClientUserId,
+                          storedOrderUrl: item.orderUrl,
+                        });
                         return (
                           <SortableInvoiceLineRow
                             key={item.id}
@@ -4572,9 +4609,9 @@ Prep Services FBA Team`;
                                 </label>
                                 {isPrintMode ? (
                                   <p className="text-sm whitespace-pre-wrap break-words">
-                                    {item.orderUrl ? (
+                                    {orderOpenHref ? (
                                       <a
-                                        href={item.orderUrl}
+                                        href={orderOpenHref}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="text-blue-600 underline underline-offset-2"
@@ -4637,9 +4674,9 @@ Prep Services FBA Team`;
                                       rows={2}
                                       className="min-h-9 border-amber-200/70 w-full resize-y"
                                     />
-                                    {item.orderUrl ? (
+                                    {orderOpenHref ? (
                                       <a
-                                        href={item.orderUrl}
+                                        href={orderOpenHref}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="inline-flex text-[11px] font-medium text-blue-600 underline underline-offset-2"

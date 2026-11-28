@@ -70,6 +70,7 @@ import {
   type CrmClientInvoiceTemplateFields,
 } from "@/lib/crm-client-invoice-template";
 import { resolvePrepcorexOrderOpenUrl } from "@/lib/prepcorex-order-open";
+import { collapseLegacyCrmInvoiceItemsToOrderLines } from "@/lib/crm-outbound-order-line-repair";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1587,7 +1588,7 @@ export function InvoiceManagementPortal() {
       ...invoice.items.map((item) => {
         const orderNumber =
           String(item.orderNumber || "").trim() ||
-          (String(item.description || "").match(/^Order\s+(.+)$/i)?.[1] || "").trim();
+          (String(item.description || "").match(/^Order\s+([A-Za-z0-9_-]+)/i)?.[1] || "").trim();
         const clientUid = String(invoice.prepcorexClientUserId || "").trim();
         const descriptionUrl = resolvePrepcorexOrderOpenUrl({
           orderNumber,
@@ -2596,29 +2597,54 @@ Prep Services FBA Team`;
 
   const handleEditInvoice = (invoice: ExternalInvoice) => {
     void (async () => {
+      let working = invoice;
+      // PrepCorex outbound drafts synced before Order-number lines: collapse SKU/service
+      // breakdown into one Order … · Requested … row per outbound when opening edit.
+      const isPrepcorexOutbound =
+        Boolean(String((invoice as { prepcorexClientUserId?: string }).prepcorexClientUserId || "").trim()) ||
+        (Array.isArray((invoice as { prepcorexShipmentRequestIds?: unknown[] }).prepcorexShipmentRequestIds) &&
+          (invoice as { prepcorexShipmentRequestIds: unknown[] }).prepcorexShipmentRequestIds.length > 0);
+      if (isPrepcorexOutbound && invoice.id) {
+        try {
+          const result = await collapseLegacyCrmInvoiceItemsToOrderLines(invoice.id);
+          if (result.repaired) {
+            const refreshed = await getDoc(doc(db, "external_invoices", invoice.id));
+            if (refreshed.exists()) {
+              working = { id: refreshed.id, ...(refreshed.data() as Omit<ExternalInvoice, "id">) };
+            }
+            toast({
+              title: "Invoice lines updated",
+              description: `Converted ${result.orderCount} outbound(s) to Order number + requested date.`,
+            });
+          }
+        } catch (repairErr) {
+          console.warn("[crm-invoice] order-line repair failed", repairErr);
+        }
+      }
+
       // Keep DRAFT-PCX-… while editing; INV- is assigned only on View / Download / Send / Sync.
-      const normalizedItems = (invoice.items || []).map(normalizeExternalItem);
-      const normalizedShippingLabels = (invoice.shippingLabelItems || []).map(
+      const normalizedItems = (working.items || []).map(normalizeExternalItem);
+      const normalizedShippingLabels = (working.shippingLabelItems || []).map(
         normalizeExternalItem
       );
       setFormData({
-        ...invoice,
+        ...working,
         ...DEFAULT_COMPANY,
-        companyName: invoice.companyName || DEFAULT_COMPANY.companyName,
-        companyAddress: invoice.companyAddress || DEFAULT_COMPANY.companyAddress,
+        companyName: working.companyName || DEFAULT_COMPANY.companyName,
+        companyAddress: working.companyAddress || DEFAULT_COMPANY.companyAddress,
         companyCityStateZip:
-          invoice.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
-        companyCountry: invoice.companyCountry || DEFAULT_COMPANY.companyCountry,
-        companyPhone: invoice.companyPhone || DEFAULT_COMPANY.companyPhone,
-        companyEmail: invoice.companyEmail || DEFAULT_COMPANY.companyEmail,
-        invoiceNote: invoice.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
-        fobPoint: invoice.fobPoint || DEFAULT_INVOICE_META.fobPoint,
-        shippingTerms: invoice.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
-        shippedVia: invoice.shippedVia || DEFAULT_INVOICE_META.shippedVia,
+          working.companyCityStateZip || DEFAULT_COMPANY.companyCityStateZip,
+        companyCountry: working.companyCountry || DEFAULT_COMPANY.companyCountry,
+        companyPhone: working.companyPhone || DEFAULT_COMPANY.companyPhone,
+        companyEmail: working.companyEmail || DEFAULT_COMPANY.companyEmail,
+        invoiceNote: working.invoiceNote || DEFAULT_INVOICE_META.invoiceNote,
+        fobPoint: working.fobPoint || DEFAULT_INVOICE_META.fobPoint,
+        shippingTerms: working.shippingTerms || DEFAULT_INVOICE_META.shippingTerms,
+        shippedVia: working.shippedVia || DEFAULT_INVOICE_META.shippedVia,
         items: normalizedItems.length ? normalizedItems : [createEmptyItem()],
         shippingLabelItems: normalizedShippingLabels,
       });
-      setEditingInvoiceId(invoice.id);
+      setEditingInvoiceId(working.id);
       setActiveTab("new");
     })();
   };
@@ -4550,7 +4576,10 @@ Prep Services FBA Team`;
                   </div>
                   {/* Desktop header - hidden on mobile where each row has its own labels */}
                   <div className="hidden md:grid grid-cols-12 gap-2 items-center border-b border-amber-200/70 pb-2">
-                    <div className="col-span-4 pr-2">
+                    <div className="col-span-1">
+                      <h3 className="font-semibold text-amber-800">Sr.</h3>
+                    </div>
+                    <div className="col-span-3 pr-2">
                       <h3 className="font-semibold text-amber-800">Item Description</h3>
                     </div>
                     <div className="col-span-1 text-center">
@@ -4580,7 +4609,7 @@ Prep Services FBA Team`;
                       items={formData.items.map((item) => item.id)}
                       strategy={verticalListSortingStrategy}
                     >
-                      {formData.items.map((item) => {
+                      {formData.items.map((item, itemIndex) => {
                         const compare = Number(item.compareUnitPrice || 0);
                         const unit = Number(item.unitPrice || 0);
                         const qty = Number(item.quantity || 0);
@@ -4591,7 +4620,7 @@ Prep Services FBA Team`;
                         const orderOpenHref = resolvePrepcorexOrderOpenUrl({
                           orderNumber:
                             String(item.orderNumber || "").trim() ||
-                            (String(item.description || "").match(/^Order\s+(.+)$/i)?.[1] ||
+                            (String(item.description || "").match(/^Order\s+([A-Za-z0-9_-]+)/i)?.[1] ||
                               "").trim(),
                           clientUserId: formData.prepcorexClientUserId,
                           storedOrderUrl: item.orderUrl,
@@ -4604,7 +4633,15 @@ Prep Services FBA Team`;
                             className="border-b border-amber-100/50 pb-3 md:pb-2 invoice-actions"
                           >
                             <div className="grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-2 items-center">
-                              <div className="md:col-span-4 space-y-1 min-w-0 pr-2 md:pr-3">
+                              <div className="md:col-span-1 flex items-center gap-2">
+                                <span className="text-xs font-medium text-amber-800 md:hidden">
+                                  Sr.
+                                </span>
+                                <span className="text-sm font-semibold text-amber-900 tabular-nums">
+                                  {itemIndex + 1}
+                                </span>
+                              </div>
+                              <div className="md:col-span-3 space-y-1 min-w-0 pr-2 md:pr-3">
                                 <label className="text-xs font-medium text-amber-800 md:hidden">
                                   Item Description
                                 </label>
